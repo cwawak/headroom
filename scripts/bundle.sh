@@ -7,6 +7,7 @@ mkdir -p build
 
 CONFIG="${1:-release}"
 swift build -c "$CONFIG"
+BIN_DIR=$(swift build -c "$CONFIG" --show-bin-path)
 
 # Generate the icon if it isn't there yet, so a fresh clone builds a bundle that
 # actually looks like the app. Leaving it out produced a bundle with an empty
@@ -20,7 +21,7 @@ fi
 APP="build/Headroom.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp ".build/$CONFIG/Headroom" "$APP/Contents/MacOS/Headroom"
+cp "$BIN_DIR/Headroom" "$APP/Contents/MacOS/Headroom"
 cp Resources/Info.plist      "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns    "$APP/Contents/Resources/AppIcon.icns"
 
