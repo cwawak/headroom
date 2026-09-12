@@ -115,7 +115,7 @@ struct CodexProvider: UsageProvider {
 
         // Walk the most recent day directories by name — that part is still a
         // fine way to *find candidates* cheaply. It just can't pick the winner.
-        let days = Array(kids(sessionsRoot).flatMap(kids).flatMap(kids).prefix(12))
+        let days = Array(kids(sessionsRoot).lazy.flatMap(kids).flatMap(kids).prefix(12))
 
         var candidates: [(url: URL, modified: Date)] = []
         for day in days {
