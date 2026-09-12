@@ -17,6 +17,7 @@ echo "==> building release $VERSION"
 swift build -c release
 
 echo "==> icon"
+mkdir -p build
 swiftc -O -o build/make-icon scripts/make-icon.swift 2>/dev/null
 ./build/make-icon build/Headroom.iconset >/dev/null
 $ICONUTIL -c icns build/Headroom.iconset -o Resources/AppIcon.icns

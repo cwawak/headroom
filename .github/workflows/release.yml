@@ -2,7 +2,10 @@ name: Release
 
 on:
   release:
-    types: [published, created]
+    types: [published]
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -17,11 +20,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Swift environment
-        uses: swift-actions/setup-swift@v2
-        with:
-          swift-version: '5.10'
-
       - name: Package Release
         run: |
           chmod +x scripts/package-release.sh
@@ -29,7 +27,6 @@ jobs:
 
       - name: Upload Release Artifacts
         uses: softprops/action-gh-release@v2
-        if: github.event_name == 'release'
         with:
           files: |
             build/Headroom.dmg
