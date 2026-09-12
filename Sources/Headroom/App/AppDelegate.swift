@@ -204,58 +204,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
 
         for id in installed {
-            let header = NSMenuItem()
-            header.attributedTitle = sectionHeader("\(id.displayName) remaining")
-            header.isEnabled = false
-            menu.addItem(header)
-
-            var views: [QuotaWindow: MenuRowView] = [:]
-            for window in QuotaWindow.allCases {
-                let view = MenuRowView(title: window == .short ? "5 hours" : "This week")
-                let item = NSMenuItem()
-                item.view = view
-                item.isEnabled = true
-                menu.addItem(item)
-                views[window] = view
-            }
-            rowViews[id] = views
-
-            let meta = NSMenuItem()
-            meta.attributedTitle = secondary("", indent: 21)
-            meta.isEnabled = false
-            menu.addItem(meta)
-            metaItems[id] = meta
-
-            // Only Claude needs calibrating — Codex reports real percentages.
-            if id == .claude {
-                let item = NSMenuItem(title: "Calibrate from Claude's usage page…",
-                                      action: #selector(calibrateAction), keyEquivalent: "")
-                item.toolTip = "Claude → Settings → Usage shows the real percentages. "
-                    + "Entering them anchors this estimate to them."
-                item.isEnabled = true
-                item.indentationLevel = 1
-                menu.addItem(item)
-            }
-            menu.addItem(.separator())
+            buildAgentRows(for: id, into: menu)
         }
 
-        // Agents that exist but yield no numbers get one honest line each, so a
-        // missing agent reads as "looked for, here's why" rather than as a bug.
+        buildSilentAgents(into: menu)
+        buildStandardActions(into: menu)
+
+        menu.items.forEach { if $0.action != nil { $0.target = self } }
+        return menu
+    }
+
+    private func buildAgentRows(for id: ProviderID, into menu: NSMenu) {
+        let header = NSMenuItem()
+        header.attributedTitle = sectionHeader("\(id.displayName) remaining")
+        header.isEnabled = false
+        menu.addItem(header)
+
+        var views: [QuotaWindow: MenuRowView] = [:]
+        for window in QuotaWindow.allCases {
+            let view = MenuRowView(title: window == .short ? "5 hours" : "This week")
+            let item = NSMenuItem()
+            item.view = view
+            item.isEnabled = true
+            menu.addItem(item)
+            views[window] = view
+        }
+        rowViews[id] = views
+
+        let meta = NSMenuItem()
+        meta.attributedTitle = secondary("", indent: 21)
+        meta.isEnabled = false
+        menu.addItem(meta)
+        metaItems[id] = meta
+
+        // Only Claude needs calibrating — Codex reports real percentages.
+        if id == .claude {
+            let item = NSMenuItem(title: "Calibrate from Claude's usage page…",
+                                  action: #selector(calibrateAction), keyEquivalent: "")
+            item.toolTip = "Claude → Settings → Usage shows the real percentages. "
+                + "Entering them anchors this estimate to them."
+            item.isEnabled = true
+            item.indentationLevel = 1
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+    }
+
+    // Agents that exist but yield no numbers get one honest line each, so a
+    // missing agent reads as "looked for, here's why" rather than as a bug.
+    private func buildSilentAgents(into menu: NSMenu) {
         let silent = providers.filter { !$0.canReportUsage || !$0.isInstalled() }
-        if !silent.isEmpty {
-            for p in silent {
-                let reason = (try? p.snapshot())?.readings[.short].flatMap { r -> String? in
-                    if case .unavailable(let why) = r { return why }
-                    return nil
-                } ?? "not detected"
-                let item = NSMenuItem()
-                item.attributedTitle = secondary("\(p.id.displayName) — \(reason)", indent: 21)
-                item.isEnabled = false
-                menu.addItem(item)
-            }
-            menu.addItem(.separator())
-        }
+        guard !silent.isEmpty else { return }
 
+        for p in silent {
+            let reason = (try? p.snapshot())?.readings[.short].flatMap { r -> String? in
+                if case .unavailable(let why) = r { return why }
+                return nil
+            } ?? "not detected"
+            let item = NSMenuItem()
+            item.attributedTitle = secondary("\(p.id.displayName) — \(reason)", indent: 21)
+            item.isEnabled = false
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+    }
+
+    private func buildStandardActions(into menu: NSMenu) {
         let refresh = NSMenuItem(title: "Refresh Now", action: #selector(refreshAction), keyEquivalent: "r")
         refresh.isEnabled = true
         menu.addItem(refresh)
@@ -263,9 +277,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let quit = NSMenuItem(title: "Quit Headroom", action: #selector(quitAction), keyEquivalent: "q")
         quit.isEnabled = true
         menu.addItem(quit)
-
-        menu.items.forEach { if $0.action != nil { $0.target = self } }
-        return menu
     }
 
     // MARK: - Text
