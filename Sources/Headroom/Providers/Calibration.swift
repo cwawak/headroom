@@ -126,8 +126,13 @@ enum PosixSecurity {
     /// Maximum allowed file size for calibration store reads (64 KiB).
     static let maxCalibrationFileSize: Int = 64 * 1024
 
-    /// Verifies ACL safety on macOS/Linux if ACLs are attached to path.
-    /// Checks that no non-owner write permissions are granted via extended ACL entries.
+    /// Verifies ACL safety when macOS extended ACLs are attached to a path.
+    ///
+    /// Darwin exposes `acl_get_perm_np` rather than the POSIX `acl_get_perm`.
+    /// Reject any allow entry containing a permission that can mutate the path.
+    /// This is intentionally conservative: an owner-specific allow entry is also
+    /// rejected because the qualifier is a UUID and cannot safely be treated as
+    /// the file owner without another identity lookup.
     static func verifyACLSafety(path: String) -> Bool {
         #if os(macOS)
         let acl = acl_get_file(path, ACL_TYPE_EXTENDED)
@@ -138,14 +143,23 @@ enum PosixSecurity {
             while result == 0, let currentEntry = entry {
                 var permset: acl_permset_t? = nil
                 if acl_get_permset(currentEntry, &permset) == 0, let permset = permset {
-                    if acl_get_perm(permset, ACL_WRITE) == 1 || acl_get_perm(permset, ACL_WRITE_DATA) == 1 {
-                        // Check if entry applies to user non-owner or group/other
-                        var tagType: acl_tag_t = ACL_UNDEFINED_TAG
-                        if acl_get_tag_type(currentEntry, &tagType) == 0 {
-                            if tagType == ACL_GROUP || tagType == ACL_EVERYONE || tagType == ACL_USER {
-                                return false
-                            }
-                        }
+                    var tagType: acl_tag_t = ACL_UNDEFINED_TAG
+                    let isAllowEntry = acl_get_tag_type(currentEntry, &tagType) == 0
+                        && tagType == ACL_EXTENDED_ALLOW
+                    let mutationPermissions: [acl_perm_t] = [
+                        ACL_WRITE_DATA,
+                        ACL_APPEND_DATA,
+                        ACL_DELETE,
+                        ACL_DELETE_CHILD,
+                        ACL_WRITE_ATTRIBUTES,
+                        ACL_WRITE_EXTATTRIBUTES,
+                        ACL_WRITE_SECURITY,
+                        ACL_CHANGE_OWNER
+                    ]
+                    if isAllowEntry && mutationPermissions.contains(where: {
+                        acl_get_perm_np(permset, $0) == 1
+                    }) {
+                        return false
                     }
                 }
                 result = acl_get_entry(acl, ACL_NEXT_ENTRY.rawValue, &entry)

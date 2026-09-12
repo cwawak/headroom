@@ -14,7 +14,15 @@ DMG="build/Headroom.dmg"
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Resources/Info.plist 2>/dev/null || grep -A1 "CFBundleShortVersionString" Resources/Info.plist | grep string | sed -E 's/.*<string>(.*)<\/string>.*/\1/' | xargs)
 
 echo "==> building release $VERSION"
-swift build -c release
+if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+    TAG_VERSION="${GITHUB_REF_NAME#v}"
+    if [ "$TAG_VERSION" != "$VERSION" ]; then
+        echo "Tag $GITHUB_REF_NAME does not match app version $VERSION" >&2
+        exit 1
+    fi
+fi
+
+BIN_DIR=$(swift build -c release --show-bin-path)
 
 echo "==> icon"
 swiftc -O -o build/make-icon scripts/make-icon.swift 2>/dev/null
@@ -24,7 +32,7 @@ $ICONUTIL -c icns build/Headroom.iconset -o Resources/AppIcon.icns
 echo "==> bundle"
 rm -rf "$APP" "$APP_ZIP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/Headroom "$APP/Contents/MacOS/Headroom"
+cp "$BIN_DIR/Headroom" "$APP/Contents/MacOS/Headroom"
 cp Resources/Info.plist      "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns    "$APP/Contents/Resources/AppIcon.icns"
 
