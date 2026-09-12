@@ -121,15 +121,150 @@ struct Calibration: Codable, Sendable {
     }
 }
 
+/// Helper functions for safe POSIX file opening and directory checking.
+enum PosixSecurity {
+    /// Maximum allowed file size for calibration store reads (64 KiB).
+    static let maxCalibrationFileSize: Int = 64 * 1024
+
+    /// Verifies ACL safety on macOS/Linux if ACLs are attached to path.
+    /// Checks that no non-owner write permissions are granted via extended ACL entries.
+    static func verifyACLSafety(path: String) -> Bool {
+        #if os(macOS)
+        let acl = acl_get_file(path, ACL_TYPE_EXTENDED)
+        if let acl = acl {
+            defer { acl_free(UnsafeMutableRawPointer(acl)) }
+            var entry: acl_entry_t? = nil
+            var result = acl_get_entry(acl, ACL_FIRST_ENTRY.rawValue, &entry)
+            while result == 0, let currentEntry = entry {
+                var permset: acl_permset_t? = nil
+                if acl_get_permset(currentEntry, &permset) == 0, let permset = permset {
+                    if acl_get_perm(permset, ACL_WRITE) == 1 || acl_get_perm(permset, ACL_WRITE_DATA) == 1 {
+                        // Check if entry applies to user non-owner or group/other
+                        var tagType: acl_tag_t = ACL_UNDEFINED_TAG
+                        if acl_get_tag_type(currentEntry, &tagType) == 0 {
+                            if tagType == ACL_GROUP || tagType == ACL_EVERYONE || tagType == ACL_USER {
+                                return false
+                            }
+                        }
+                    }
+                }
+                result = acl_get_entry(acl, ACL_NEXT_ENTRY.rawValue, &entry)
+            }
+        }
+        #endif
+        return true
+    }
+
+    /// Verifies that all path components under `basePath` leading to `targetPath`
+    /// are secure directories (owned by `geteuid()`, no group/other write permissions `022 == 0`,
+    /// not symbolic links, and no insecure ACLs).
+    static func verifyDirectoryChain(basePath: String, targetPath: String) -> Bool {
+        let baseComponents = URL(fileURLWithPath: basePath).standardized.pathComponents
+        let targetComponents = URL(fileURLWithPath: targetPath).standardized.pathComponents
+
+        guard targetComponents.starts(with: baseComponents) else { return false }
+
+        var currentPath = ""
+        for (idx, comp) in targetComponents.enumerated() {
+            if idx == 0 && comp == "/" {
+                currentPath = "/"
+                continue
+            }
+            if currentPath == "/" {
+                currentPath += comp
+            } else {
+                currentPath += "/" + comp
+            }
+
+            // Only check up to parent directory of target
+            if idx >= targetComponents.count - 1 {
+                break
+            }
+
+            var st = stat()
+            guard lstat(currentPath, &st) == 0 else { return false }
+            // Must be directory
+            guard (st.st_mode & S_IFMT) == S_IFDIR else { return false }
+            // Must not be a symlink
+            guard (st.st_mode & S_IFMT) != S_IFLNK else { return false }
+            // Must be owned by current effective user
+            guard st.st_uid == geteuid() else { return false }
+            // Must not have group or other write permission
+            guard (st.st_mode & 0o022) == 0 else { return false }
+            // Must pass ACL safety check
+            guard verifyACLSafety(path: currentPath) else { return false }
+        }
+        return true
+    }
+
+    /// Opens `filePath` securely using openat-style descriptor-relative relative traversal or descriptor checks.
+    /// Ensures `O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC`, checks `st_uid == geteuid()`, regular file,
+    /// mode `st_mode & 022 == 0`, and reads at most `maxSize` bytes.
+    static func readSecureFile(basePath: String, targetPath: String, maxSize: Int) -> Data? {
+        guard verifyDirectoryChain(basePath: basePath, targetPath: targetPath) else { return nil }
+        guard verifyACLSafety(path: targetPath) else { return nil }
+
+        let flags = O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
+        let fd = open(targetPath, flags)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+
+        var st = stat()
+        guard fstat(fd, &st) == 0 else { return nil }
+        // Must be regular file
+        guard (st.st_mode & S_IFMT) == S_IFREG else { return nil }
+        // Must be owned by effective user
+        guard st.st_uid == geteuid() else { return nil }
+        // No group/other write permissions
+        guard (st.st_mode & 0o022) == 0 else { return nil }
+        // Bounded size
+        guard st.st_size <= maxSize else { return nil }
+
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while data.count < maxSize {
+            let toRead = min(buffer.count, maxSize - data.count)
+            let bytesRead = read(fd, &buffer, toRead)
+            if bytesRead > 0 {
+                data.append(buffer, count: bytesRead)
+            } else if bytesRead == 0 {
+                break
+            } else {
+                if errno == EINTR { continue }
+                return nil
+            }
+        }
+        return data
+    }
+}
+
 /// Persisted beside the app's other support files so calibration survives
 /// restarts — the whole point is that it improves over weeks.
 enum CalibrationStore {
 
-    private static var url: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Headroom", isDirectory: true)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        return base.appendingPathComponent("calibration.json")
+    static var customApplicationSupportDirectory: URL?
+
+    private static var appSupportBaseURL: URL {
+        if let custom = customApplicationSupportDirectory {
+            return custom
+        }
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    }
+
+    static var headroomDirectoryURL: URL {
+        appSupportBaseURL.appendingPathComponent("Headroom", isDirectory: true)
+    }
+
+    static var url: URL {
+        headroomDirectoryURL.appendingPathComponent("calibration.json")
+    }
+
+    static var legacyDirectoryURL: URL {
+        appSupportBaseURL.appendingPathComponent("NotchGauge", isDirectory: true)
+    }
+
+    static var legacyURL: URL {
+        legacyDirectoryURL.appendingPathComponent("calibration.json")
     }
 
     /// The app was called NotchGauge before it was called Headroom, so anyone
@@ -139,24 +274,127 @@ enum CalibrationStore {
     /// schema change already caused once in this project.
     private static func migrateLegacyStoreIfNeeded() {
         let fm = FileManager.default
-        guard !fm.fileExists(atPath: url.path) else { return }
-        let legacy = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("NotchGauge", isDirectory: true)
-            .appendingPathComponent("calibration.json")
-        guard fm.fileExists(atPath: legacy.path) else { return }
-        try? fm.copyItem(at: legacy, to: url)
+        let destPath = url.path
+        let legacyPath = legacyURL.path
+        let basePath = appSupportBaseURL.path
+
+        // If destination already exists, no migration needed
+        guard !fm.fileExists(atPath: destPath) else { return }
+        guard fm.fileExists(atPath: legacyPath) else { return }
+
+        // Securely read from legacy descriptor
+        guard let data = PosixSecurity.readSecureFile(basePath: basePath, targetPath: legacyPath, maxSize: PosixSecurity.maxCalibrationFileSize) else {
+            return
+        }
+
+        // Validate decoded structure before publishing
+        guard let _ = try? JSONDecoder().decode(Calibration.self, from: data) else {
+            return
+        }
+
+        // Ensure target directory exists securely
+        try? fm.createDirectory(at: headroomDirectoryURL, withIntermediateDirectories: true)
+
+        // Write to a temporary file in the target directory first
+        let tmpURL = headroomDirectoryURL.appendingPathComponent(".calibration.json.tmp.\(UUID().uuidString)")
+        let tmpPath = tmpURL.path
+
+        guard PosixSecurity.verifyDirectoryChain(basePath: basePath, targetPath: tmpPath) else { return }
+
+        let flags = O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC
+        let mode: mode_t = 0o600
+        let fd = open(tmpPath, flags, mode)
+        guard fd >= 0 else { return }
+
+        var writeSuccess = false
+        data.withUnsafeBytes { ptr in
+            guard let baseAddr = ptr.baseAddress else { return }
+            var written = 0
+            let total = data.count
+            while written < total {
+                let bytesWritten = write(fd, baseAddr.advanced(by: written), total - written)
+                if bytesWritten > 0 {
+                    written += bytesWritten
+                } else if bytesWritten < 0 {
+                    if errno == EINTR { continue }
+                    break
+                }
+            }
+            if written == total {
+                writeSuccess = true
+            }
+        }
+        close(fd)
+
+        guard writeSuccess else {
+            unlink(tmpPath)
+            return
+        }
+
+        // Atomic publish using link or rename without replacing destination
+        // POSIX rename replaces destination if it exists; to avoid replacing destination if another process created it:
+        // On Unix/macOS, link(tmpPath, destPath) fails with EEXIST if destPath exists!
+        if link(tmpPath, destPath) == 0 {
+            unlink(tmpPath)
+        } else {
+            // link failed or destination already exists or filesystem doesn't support link
+            unlink(tmpPath)
+        }
     }
 
     static func load() -> Calibration {
         migrateLegacyStoreIfNeeded()
-        guard let data = try? Data(contentsOf: url),
-              let c = try? JSONDecoder().decode(Calibration.self, from: data)
-        else { return .seed }
-        return c
+        let basePath = appSupportBaseURL.path
+        let destPath = url.path
+        if let data = PosixSecurity.readSecureFile(basePath: basePath, targetPath: destPath, maxSize: PosixSecurity.maxCalibrationFileSize),
+           let c = try? JSONDecoder().decode(Calibration.self, from: data) {
+            return c
+        }
+        return .seed
     }
 
     static func save(_ c: Calibration) {
         guard let data = try? JSONEncoder().encode(c) else { return }
-        try? data.write(to: url, options: .atomic)
+        let fm = FileManager.default
+        try? fm.createDirectory(at: headroomDirectoryURL, withIntermediateDirectories: true)
+
+        let basePath = appSupportBaseURL.path
+        let destPath = url.path
+        let tmpURL = headroomDirectoryURL.appendingPathComponent(".calibration.json.tmp.\(UUID().uuidString)")
+        let tmpPath = tmpURL.path
+
+        guard PosixSecurity.verifyDirectoryChain(basePath: basePath, targetPath: tmpPath) else { return }
+
+        let flags = O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC
+        let mode: mode_t = 0o600
+        let fd = open(tmpPath, flags, mode)
+        guard fd >= 0 else { return }
+
+        var writeSuccess = false
+        data.withUnsafeBytes { ptr in
+            guard let baseAddr = ptr.baseAddress else { return }
+            var written = 0
+            let total = data.count
+            while written < total {
+                let bytesWritten = write(fd, baseAddr.advanced(by: written), total - written)
+                if bytesWritten > 0 {
+                    written += bytesWritten
+                } else if bytesWritten < 0 {
+                    if errno == EINTR { continue }
+                    break
+                }
+            }
+            if written == total {
+                writeSuccess = true
+            }
+        }
+        close(fd)
+
+        guard writeSuccess else {
+            unlink(tmpPath)
+            return
+        }
+
+        rename(tmpPath, destPath)
     }
 }
