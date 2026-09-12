@@ -377,7 +377,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             currentOffset += UInt64(bytesRead)
 
             // Process buffer with leftover
-            var buffer = state.leftover + chunkData
+            let buffer = state.leftover + chunkData
             state.leftover = Data()
 
             var searchIndex = 0
