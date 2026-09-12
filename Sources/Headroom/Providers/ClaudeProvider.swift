@@ -325,7 +325,13 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             return
         }
 
-        let mtime = Date(timeIntervalSince1970: TimeInterval(st.st_mtime))
+        // Darwin's `stat` exposes the modification time as `st_mtimespec`.
+        // `st_mtime` is the Linux/glibc spelling and is not available when this
+        // package is compiled by the Swift.org macOS toolchain used in CI.
+        let mtime = Date(
+            timeIntervalSince1970: TimeInterval(st.st_mtimespec.tv_sec)
+                + TimeInterval(st.st_mtimespec.tv_nsec) / 1_000_000_000
+        )
         if mtime < cutoff {
             return
         }
