@@ -21,24 +21,32 @@ enum Probe {
                         print(String(format: "raw weighted %@: %.0f", w.shortLabel, raw[w]!))
                     }
                 }
-                for w in QuotaWindow.allCases {
-                    guard let r = snap.readings[w] else { continue }
-                    switch r {
-                    case .authoritative(let pct, let reset):
-                        var line = String(format: "  %@  %3.0f%%  exact", w.shortLabel, pct)
-                        if let reset {
-                            line += "  resets \(RelativeDateTimeFormatter().localizedString(for: reset, relativeTo: Date()))"
-                        }
-                        print(line)
-                    case .estimated(let pct, let c, _):
-                        print(String(format: "  %@  %3.0f%%  est (conf %.2f)", w.shortLabel, pct, c))
-                    case .unavailable(let why):
-                        print("  \(w.shortLabel)    —   \(why)")
-                    }
-                }
+                printReadings(for: snap)
             } catch {
                 print("ERROR: \(error)")
             }
+        }
+    }
+
+    static func printReadings(for snap: Snapshot, relativeTo date: Date = Date()) {
+        for w in QuotaWindow.allCases {
+            guard let r = snap.readings[w] else { continue }
+            print(formattedReading(for: w, reading: r, relativeTo: date))
+        }
+    }
+
+    static func formattedReading(for window: QuotaWindow, reading: Reading, relativeTo date: Date = Date()) -> String {
+        switch reading {
+        case .authoritative(let pct, let reset):
+            var line = String(format: "  %@  %3.0f%%  exact", window.shortLabel, pct)
+            if let reset {
+                line += "  resets \(RelativeDateTimeFormatter().localizedString(for: reset, relativeTo: date))"
+            }
+            return line
+        case .estimated(let pct, let c, _):
+            return String(format: "  %@  %3.0f%%  est (conf %.2f)", window.shortLabel, pct, c)
+        case .unavailable(let why):
+            return "  \(window.shortLabel)    —   \(why)"
         }
     }
 }
