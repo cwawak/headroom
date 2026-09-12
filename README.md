@@ -85,6 +85,15 @@ a missing agent reads as "looked for, here's why" rather than as a bug.
 
 `package-release.sh` builds an unsigned `Headroom.dmg` and `Headroom.app.zip` release package without developer identity or notarization requirements (used in automated GitHub Actions releases).
 
+## Releases
+
+`CFBundleShortVersionString` in `Resources/Info.plist` is the release version.
+When a new version reaches `main`, GitHub Actions creates the corresponding
+`v<version>` tag if it does not already exist. That tag triggers a clean macOS
+build and test run, creates the GitHub Release, and attaches `Headroom.dmg` and
+`Headroom.app.zip`. A `v*` tag pushed directly follows the same build-and-release
+path; its version must match `Info.plist`.
+
 ```bash
 ./.build/release/Headroom --probe
 ```
