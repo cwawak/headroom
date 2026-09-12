@@ -3,6 +3,9 @@ name: Release
 on:
   release:
     types: [published, created]
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -29,8 +32,17 @@ jobs:
 
       - name: Upload Release Artifacts
         uses: softprops/action-gh-release@v2
-        if: github.event_name == 'release'
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'release'
         with:
           files: |
+            build/Headroom.dmg
+            build/Headroom.app.zip
+
+      - name: Upload Workflow Artifacts
+        uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/')
+        with:
+          name: Headroom-build
+          path: |
             build/Headroom.dmg
             build/Headroom.app.zip
