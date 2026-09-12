@@ -120,6 +120,7 @@ final class HeadroomHardeningTests: XCTestCase {
 
         let provider = ClaudeProvider()
         provider.customProjectsRoot = projectsDir
+        provider.customAgentModeRoot = tempDir.appendingPathComponent("MissingAgentMode")
         provider.customNow = now
 
         let snap = try! provider.snapshot()
@@ -152,6 +153,7 @@ final class HeadroomHardeningTests: XCTestCase {
 
         let provider = ClaudeProvider()
         provider.customProjectsRoot = projectsDir
+        provider.customAgentModeRoot = tempDir.appendingPathComponent("MissingAgentMode")
         provider.customNow = now
 
         let snap = try! provider.snapshot()
@@ -173,6 +175,7 @@ final class HeadroomHardeningTests: XCTestCase {
 
         let provider = ClaudeProvider()
         provider.customProjectsRoot = projectsDir
+        provider.customAgentModeRoot = tempDir.appendingPathComponent("MissingAgentMode")
         let snap = try! provider.snapshot()
 
         // Symlink should be skipped securely
