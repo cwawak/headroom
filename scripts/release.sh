@@ -57,6 +57,7 @@ VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Resource
 echo "==> building $VERSION"
 echo "    signing as: $IDENTITY"
 swift build -c release
+BIN_DIR=$(swift build -c release --show-bin-path)
 
 echo "==> icon"
 /usr/bin/xcrun --sdk macosx swiftc -O -o build/make-icon scripts/make-icon.swift
@@ -66,7 +67,7 @@ $ICONUTIL -c icns build/Headroom.iconset -o Resources/AppIcon.icns
 echo "==> bundle"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/Headroom "$APP/Contents/MacOS/Headroom"
+cp "$BIN_DIR/Headroom" "$APP/Contents/MacOS/Headroom"
 cp Resources/Info.plist      "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns    "$APP/Contents/Resources/AppIcon.icns"
 
