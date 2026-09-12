@@ -27,7 +27,7 @@ fi
 BIN_DIR=$(swift build -c release --show-bin-path)
 
 echo "==> icon"
-swiftc -O -o build/make-icon scripts/make-icon.swift
+/usr/bin/xcrun --sdk macosx swiftc -O -o build/make-icon scripts/make-icon.swift
 ./build/make-icon build/Headroom.iconset >/dev/null
 $ICONUTIL -c icns build/Headroom.iconset -o Resources/AppIcon.icns
 
