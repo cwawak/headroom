@@ -328,9 +328,9 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             // Claude Code calls it `quotaLimits`; the desktop agent logs call it
             // `rate_limit_info`. Same shape, and the latter sometimes carries the
             // exact fraction.
-            if let info = row.rateLimitInfo {
-                if info.status == "rejected", let w = info.window { rejections.append((date, w)) }
-                if let u = info.utilization, u > 0.05, u <= 1.5, let w = info.window {
+            if let info = row.rateLimitInfo, let w = info.window {
+                if info.status == "rejected" { rejections.append((date, w)) }
+                if let u = info.utilization, u > 0.05, u <= 1.5 {
                     utilizations.append((date, w, u))
                 }
             }
