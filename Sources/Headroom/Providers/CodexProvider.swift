@@ -30,12 +30,12 @@ struct CodexProvider: UsageProvider {
 
     func snapshot() throws -> Snapshot {
         guard isInstalled() else {
-            return Snapshot(provider: id, readings: unavailable("Codex not installed"),
+            return Snapshot(provider: id, readings: Self.unavailable("Codex not installed"),
                             capturedAt: Date(), sourceDate: nil, planLabel: nil, rawWeighted: nil)
         }
         let files = newestRollouts()
         guard !files.isEmpty else {
-            return Snapshot(provider: id, readings: unavailable("No sessions yet"),
+            return Snapshot(provider: id, readings: Self.unavailable("No sessions yet"),
                             capturedAt: Date(), sourceDate: nil, planLabel: nil, rawWeighted: nil)
         }
         // The freshest file may hold no quota event at all (a session that only
@@ -46,13 +46,11 @@ struct CodexProvider: UsageProvider {
             if let hit = try? lastQuotaEvent(in: file) { found = hit; break }
         }
         guard let hit = found else {
-            return Snapshot(provider: id, readings: unavailable("No quota event in recent sessions"),
+            return Snapshot(provider: id, readings: Self.unavailable("No quota event in recent sessions"),
                             capturedAt: Date(), sourceDate: nil, planLabel: nil, rawWeighted: nil)
         }
 
-        var readings: [QuotaWindow: Reading] = [:]
-        readings[.short] = reading(from: hit.limits.primary)
-        readings[.long]  = reading(from: hit.limits.secondary)
+        let readings = Self.readings(from: hit.limits)
 
         return Snapshot(provider: id,
                         readings: readings,
@@ -64,8 +62,25 @@ struct CodexProvider: UsageProvider {
 
     // MARK: - Mapping
 
-    private func reading(from w: RateWindow?) -> Reading {
-        guard let w, let pct = w.usedPercent else { return .unavailable(reason: "not reported") }
+    static func readings(from limits: RateLimits, now: Date = Date()) -> [QuotaWindow: Reading] {
+        var readings = unavailable("not reported by Codex")
+        for rateWindow in [limits.primary, limits.secondary].compactMap({ $0 }) {
+            let quotaWindow: QuotaWindow
+            switch rateWindow.windowMinutes {
+            case 5 * 60:
+                quotaWindow = .short
+            case 7 * 24 * 60:
+                quotaWindow = .long
+            default:
+                continue
+            }
+            readings[quotaWindow] = reading(from: rateWindow, now: now)
+        }
+        return readings
+    }
+
+    private static func reading(from w: RateWindow, now: Date) -> Reading {
+        guard let pct = w.usedPercent else { return .unavailable(reason: "not reported") }
         let reset = w.resetsAt.map { Date(timeIntervalSince1970: $0) }
 
         // These logs only advance while Codex is running. Once `resetsAt` passes,
@@ -73,7 +88,7 @@ struct CodexProvider: UsageProvider {
         // just stale — it is wrong in the dangerous direction. A cached 100%
         // would say "you are blocked" to someone with a full fresh window.
         // We can't know the new value until Codex next writes, so say so.
-        if let reset, reset <= Date() {
+        if let reset, reset <= now {
             return .unavailable(reason: "window reset — run Codex to refresh")
         }
 
@@ -81,7 +96,7 @@ struct CodexProvider: UsageProvider {
         return .authoritative(percent: max(0, min(100, pct)), resetsAt: reset)
     }
 
-    private func unavailable(_ reason: String) -> [QuotaWindow: Reading] {
+    private static func unavailable(_ reason: String) -> [QuotaWindow: Reading] {
         Dictionary(uniqueKeysWithValues: QuotaWindow.allCases.map { ($0, .unavailable(reason: reason)) })
     }
 
