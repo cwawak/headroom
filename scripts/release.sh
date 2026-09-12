@@ -13,6 +13,7 @@
 #
 set -euo pipefail
 cd "$(dirname "$0")/.."
+mkdir -p build
 
 # Signing identity. Auto-detected when your keychain holds exactly one
 # "Developer ID Application" certificate, which is the normal case — hardcoding
@@ -58,7 +59,7 @@ echo "    signing as: $IDENTITY"
 swift build -c release
 
 echo "==> icon"
-swiftc -O -o build/make-icon scripts/make-icon.swift 2>/dev/null
+swiftc -O -o build/make-icon scripts/make-icon.swift
 ./build/make-icon build/Headroom.iconset >/dev/null
 $ICONUTIL -c icns build/Headroom.iconset -o Resources/AppIcon.icns
 
