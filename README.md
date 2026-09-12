@@ -13,9 +13,8 @@ Requires macOS 14+.
 
 ## Install
 
-Download `Headroom.dmg` from [Releases](../../releases), drag it to Applications,
-and launch. It's a menu bar app — no Dock icon. Signed and notarized, with
-tickets stapled to both the DMG and the app, so it installs offline.
+Download `Headroom.dmg` or `Headroom.app.zip` from [Releases](../../releases), drag it to Applications,
+and launch. It's a menu bar app — no Dock icon. Signed and notarized releases (or automated unsigned build releases) are available under Releases.
 
 ## Agent support
 
@@ -73,12 +72,18 @@ a missing agent reads as "looked for, here's why" rather than as a bug.
 ```
 
 ```bash
+./scripts/package-release.sh
+```
+
+```bash
 ./scripts/release.sh
 ```
 
 ```bash
 ./scripts/release.sh notarize
 ```
+
+`package-release.sh` builds an unsigned `Headroom.dmg` and `Headroom.app.zip` release package without developer identity or notarization requirements (used in automated GitHub Actions releases).
 
 ```bash
 ./.build/release/Headroom --probe
