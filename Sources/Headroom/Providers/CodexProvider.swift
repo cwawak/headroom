@@ -176,9 +176,9 @@ struct CodexProvider: UsageProvider {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
 
         for line in lines.reversed() {
+            // Cheap byte test before paying for Data allocation and JSON decoding on a 72 MB file's worth of lines.
+            guard line.firstRange(of: Self.marker) != nil else { continue }
             let data = Data(line)
-            // Cheap byte test before paying for JSON on a 72 MB file's worth of lines.
-            guard data.range(of: Self.marker) != nil else { continue }
             guard let row = try? decoder.decode(RolloutLine.self, from: data),
                   row.payload?.type == "token_count",
                   let limits = row.payload?.rateLimits,
