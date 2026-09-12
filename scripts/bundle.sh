@@ -3,6 +3,7 @@
 # For anything you intend to hand to someone else, use ./scripts/release.sh.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+mkdir -p build
 
 CONFIG="${1:-release}"
 swift build -c "$CONFIG"
@@ -11,7 +12,7 @@ swift build -c "$CONFIG"
 # actually looks like the app. Leaving it out produced a bundle with an empty
 # Resources/ and the generic placeholder icon in every dialog.
 if [ ! -f Resources/AppIcon.icns ]; then
-    swiftc -O -o build/make-icon scripts/make-icon.swift 2>/dev/null
+    swiftc -O -o build/make-icon scripts/make-icon.swift
     ./build/make-icon build/Headroom.iconset >/dev/null
     /usr/bin/iconutil -c icns build/Headroom.iconset -o Resources/AppIcon.icns
 fi
