@@ -155,7 +155,7 @@ final class HeadroomHardeningTests: XCTestCase {
         provider.customNow = now
 
         let snap = try! provider.snapshot()
-        XCTAssertNotNil(snap.rawWeighted[.short])
+        XCTAssertNotNil(snap.rawWeighted?[.short])
     }
 
     func testSymlinkRootAndEscapeRejection() {
