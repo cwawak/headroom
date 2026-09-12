@@ -275,8 +275,14 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
     }
 
     private static func isSecureChild(baseRoot: String, candidatePath: String) -> Bool {
-        let baseComponents = URL(fileURLWithPath: baseRoot).standardized.pathComponents
-        let candComponents = URL(fileURLWithPath: candidatePath).standardized.pathComponents
+        // macOS aliases `/var` to `/private/var`; FileManager may enumerate a
+        // temporary path using the latter even when the caller supplied the
+        // former. Resolve both sides before comparing. Resolving the candidate
+        // also exposes a child symlink that points outside the source root.
+        let baseComponents = URL(fileURLWithPath: baseRoot)
+            .resolvingSymlinksInPath().standardized.pathComponents
+        let candComponents = URL(fileURLWithPath: candidatePath)
+            .resolvingSymlinksInPath().standardized.pathComponents
         guard candComponents.count >= baseComponents.count else { return false }
         for i in 0..<baseComponents.count {
             if baseComponents[i] != candComponents[i] { return false }
@@ -377,7 +383,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             currentOffset += UInt64(bytesRead)
 
             // Process buffer with leftover
-            var buffer = state.leftover + chunkData
+            let buffer = state.leftover + chunkData
             state.leftover = Data()
 
             var searchIndex = 0

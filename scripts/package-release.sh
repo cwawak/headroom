@@ -13,6 +13,8 @@ APP_ZIP="build/Headroom.app.zip"
 DMG="build/Headroom.dmg"
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Resources/Info.plist 2>/dev/null || grep -A1 "CFBundleShortVersionString" Resources/Info.plist | grep string | sed -E 's/.*<string>(.*)<\/string>.*/\1/' | xargs)
 
+mkdir -p build
+
 echo "==> building release $VERSION"
 if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
     TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -22,10 +24,11 @@ if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
     fi
 fi
 
+swift build -c release
 BIN_DIR=$(swift build -c release --show-bin-path)
 
 echo "==> icon"
-swiftc -O -o build/make-icon scripts/make-icon.swift 2>/dev/null
+/usr/bin/xcrun --sdk macosx swiftc -O -o build/make-icon scripts/make-icon.swift
 ./build/make-icon build/Headroom.iconset >/dev/null
 $ICONUTIL -c icns build/Headroom.iconset -o Resources/AppIcon.icns
 

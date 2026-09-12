@@ -178,23 +178,18 @@ enum PosixSecurity {
 
         guard targetComponents.starts(with: baseComponents) else { return false }
 
-        var currentPath = ""
-        for (idx, comp) in targetComponents.enumerated() {
-            if idx == 0 && comp == "/" {
-                currentPath = "/"
-                continue
-            }
-            if currentPath == "/" {
-                currentPath += comp
-            } else {
-                currentPath += "/" + comp
-            }
+        // The system supplies the application-support base. Validate that base
+        // and every directory below it, not unrelated ancestors such as `/`,
+        // which is correctly owned by root and made every read fail.
+        var directoryPaths = [URL(fileURLWithPath: basePath).standardized.path]
+        var currentPath = directoryPaths[0]
+        for component in targetComponents.dropFirst(baseComponents.count).dropLast() {
+            currentPath = URL(fileURLWithPath: currentPath)
+                .appendingPathComponent(component, isDirectory: true).path
+            directoryPaths.append(currentPath)
+        }
 
-            // Only check up to parent directory of target
-            if idx >= targetComponents.count - 1 {
-                break
-            }
-
+        for currentPath in directoryPaths {
             var st = stat()
             guard lstat(currentPath, &st) == 0 else { return false }
             // Must be directory
