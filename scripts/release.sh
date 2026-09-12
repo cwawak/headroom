@@ -108,10 +108,19 @@ if [ "${1:-}" = "notarize" ]; then
 
     echo "==> verification"
     $SPCTL -a -vvv -t open --context context:primary-signature "$DMG"
-    /usr/bin/hdiutil attach "$DMG" -nobrowse -quiet -mountpoint /tmp/hr-verify
-    xcrun stapler validate /tmp/hr-verify/Headroom.app
-    $SPCTL -a -vvv -t exec /tmp/hr-verify/Headroom.app
-    /usr/bin/hdiutil detach /tmp/hr-verify -quiet
+    MOUNTPOINT=$(mktemp -d "${TMPDIR:-/tmp}/hr-verify.XXXXXX")
+    cleanup() {
+        $HDIUTIL detach "$MOUNTPOINT" -quiet 2>/dev/null || true
+        rm -rf "$MOUNTPOINT"
+    }
+    trap cleanup EXIT INT TERM
+
+    $HDIUTIL attach "$DMG" -nobrowse -quiet -mountpoint "$MOUNTPOINT"
+    xcrun stapler validate "$MOUNTPOINT/Headroom.app"
+    $SPCTL -a -vvv -t exec "$MOUNTPOINT/Headroom.app"
+    $HDIUTIL detach "$MOUNTPOINT" -quiet
+    rm -rf "$MOUNTPOINT"
+    trap - EXIT INT TERM
 fi
 
 echo
