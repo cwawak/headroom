@@ -24,6 +24,7 @@ if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
     fi
 fi
 
+swift build -c release
 BIN_DIR=$(swift build -c release --show-bin-path)
 
 echo "==> icon"
