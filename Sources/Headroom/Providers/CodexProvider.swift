@@ -15,8 +15,10 @@ struct CodexProvider: UsageProvider {
 
     let id: ProviderID = .codex
 
+    var customSessionsRoot: URL?
+
     private var sessionsRoot: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        customSessionsRoot ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/sessions", isDirectory: true)
     }
 
@@ -113,15 +115,7 @@ struct CodexProvider: UsageProvider {
 
         // Walk the most recent day directories by name — that part is still a
         // fine way to *find candidates* cheaply. It just can't pick the winner.
-        var days: [URL] = []
-        outer: for year in kids(sessionsRoot) {
-            for month in kids(year) {
-                for day in kids(month) {
-                    days.append(day)
-                    if days.count >= 12 { break outer }
-                }
-            }
-        }
+        let days = Array(kids(sessionsRoot).flatMap(kids).flatMap(kids).prefix(12))
 
         var candidates: [(url: URL, modified: Date)] = []
         for day in days {
