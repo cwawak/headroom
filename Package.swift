@@ -9,6 +9,11 @@ let package = Package(
             name: "Headroom",
             path: "Sources/Headroom",
             swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .testTarget(
+            name: "HeadroomTests",
+            dependencies: ["Headroom"],
+            path: "Tests/HeadroomTests"
         )
     ]
 )

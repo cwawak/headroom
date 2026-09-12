@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  release:
+    types: [published, created]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and Package Release
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Swift environment
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: '5.10'
+
+      - name: Package Release
+        run: |
+          chmod +x scripts/package-release.sh
+          ./scripts/package-release.sh
+
+      - name: Upload Release Artifacts
+        uses: softprops/action-gh-release@v2
+        if: github.event_name == 'release'
+        with:
+          files: |
+            build/Headroom.dmg
+            build/Headroom.app.zip
