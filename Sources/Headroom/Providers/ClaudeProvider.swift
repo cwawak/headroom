@@ -127,7 +127,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
 
         let session = currentSession(now: now)
         let weekStart = weeklyWindowStart(now: now, calibration: calibration)
-        let weekSum = entries.filter { $0.date >= weekStart }.reduce(0) { $0 + $1.weight }
+        let weekSum = entries.reduce(0) { $0 + ($1.date >= weekStart ? $1.weight : 0) }
 
         learn(&calibration, sessionSum: session.sum, weekSum: weekSum, weekStart: weekStart)
 
@@ -194,7 +194,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
 
     private func weekSum(at t: Date, calibration: Calibration) -> Double {
         let start = weeklyWindowStart(now: t, calibration: calibration)
-        return entries.filter { $0.date >= start && $0.date <= t }.reduce(0) { $0 + $1.weight }
+        return entries.reduce(0) { $0 + ($1.date >= start && $1.date <= t ? $1.weight : 0) }
     }
 
     // MARK: - Calibration from observed rejections
@@ -209,8 +209,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             let from = r.date.addingTimeInterval(-span)
             guard let oldest = entries.first?.date, from >= oldest else { continue }
             let observed = entries
-                .filter { $0.date >= from && $0.date <= r.date }
-                .reduce(0) { $0 + $1.weight }
+                .reduce(0) { $0 + ($1.date >= from && $1.date <= r.date ? $1.weight : 0) }
             guard observed > 0 else { continue }
             calibration.fold(observed, into: r.window)
             newest = max(newest, r.date.timeIntervalSince1970)
