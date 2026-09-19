@@ -208,9 +208,12 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             let span: TimeInterval = r.window == .short ? Self.sessionLength : 7 * 24 * 3600
             let from = r.date.addingTimeInterval(-span)
             guard let oldest = entries.first?.date, from >= oldest else { continue }
-            let observed = entries
-                .filter { $0.date >= from && $0.date <= r.date }
-                .reduce(0) { $0 + $1.weight }
+            var observed = 0.0
+            for entry in entries {
+                if entry.date >= from && entry.date <= r.date {
+                    observed += entry.weight
+                }
+            }
             guard observed > 0 else { continue }
             calibration.fold(observed, into: r.window)
             newest = max(newest, r.date.timeIntervalSince1970)
