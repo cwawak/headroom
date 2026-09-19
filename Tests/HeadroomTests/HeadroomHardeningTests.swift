@@ -181,4 +181,30 @@ final class HeadroomHardeningTests: XCTestCase {
         // Symlink should be skipped securely
         XCTAssertNotNil(snap)
     }
+
+    func testOversizedLogRecordHandling() {
+        let projectsDir = tempDir.appendingPathComponent(".claude/projects")
+        try? FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
+
+        let now = Date(timeIntervalSince1970: 1700000000)
+        let logFile = projectsDir.appendingPathComponent("oversized.jsonl")
+
+        // Write a log file with a single line exceeding 8 MiB (8 * 1024 * 1024 + 100 bytes) without newlines
+        let oversizedLength = 8 * 1024 * 1024 + 100
+        let paddingData = Data(repeating: UInt8(ascii: "a"), count: oversizedLength)
+        try! paddingData.write(to: logFile)
+
+        let provider = ClaudeProvider()
+        provider.customProjectsRoot = projectsDir
+        provider.customAgentModeRoot = tempDir.appendingPathComponent("MissingAgentMode")
+        provider.customNow = now
+
+        let snap = try! provider.snapshot()
+
+        if case .unavailable(let reason) = snap.readings[.short] {
+            XCTAssertTrue(reason.contains("oversized log record (>8 MiB)"))
+        } else {
+            XCTFail("Expected unavailable reading due to oversized log record")
+        }
+    }
 }
