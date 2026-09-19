@@ -274,7 +274,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         return true
     }
 
-    private static func isSecureChild(baseRoot: String, candidatePath: String) -> Bool {
+    static func isSecureChild(baseRoot: String, candidatePath: String) -> Bool {
         // macOS aliases `/var` to `/private/var`; FileManager may enumerate a
         // temporary path using the latter even when the caller supplied the
         // former. Resolve both sides before comparing. Resolving the candidate
