@@ -173,17 +173,58 @@ enum PosixSecurity {
     /// are secure directories (owned by `geteuid()`, no group/other write permissions `022 == 0`,
     /// not symbolic links, and no insecure ACLs).
     static func verifyDirectoryChain(basePath: String, targetPath: String) -> Bool {
-        let baseComponents = URL(fileURLWithPath: basePath).standardized.pathComponents
-        let targetComponents = URL(fileURLWithPath: targetPath).standardized.pathComponents
+        let baseStandard = URL(fileURLWithPath: basePath).standardized
+        let targetStandard = URL(fileURLWithPath: targetPath).standardized
 
-        guard targetComponents.starts(with: baseComponents) else { return false }
+        let matchedBase: String
+        let baseCount: Int
+        let targetComps: [String]
+
+        if targetStandard.pathComponents.starts(with: baseStandard.pathComponents) {
+            matchedBase = baseStandard.path
+            baseCount = baseStandard.pathComponents.count
+            targetComps = targetStandard.pathComponents
+        } else {
+            // macOS aliases `/var` to `/private/var`, `/tmp` to `/private/tmp`, etc.
+            // When enumerating via FileManager, candidates may be returned with the canonical
+            // `/private` prefix while the base root was passed using the system alias.
+            let baseResolved = baseStandard.resolvingSymlinksInPath()
+            var matched: (base: String, count: Int, comps: [String])? = nil
+
+            if targetStandard.pathComponents.starts(with: baseResolved.pathComponents) {
+                matched = (baseResolved.path, baseResolved.pathComponents.count, targetStandard.pathComponents)
+            } else {
+                let systemAliases = [("/var/", "/private/var/"), ("/tmp/", "/private/tmp/"), ("/etc/", "/private/etc/")]
+                for (alias, canonical) in systemAliases {
+                    if targetStandard.path.hasPrefix(alias) {
+                        let candidatePrefixed = URL(fileURLWithPath: canonical + targetStandard.path.dropFirst(alias.count)).standardized
+                        if candidatePrefixed.pathComponents.starts(with: baseResolved.pathComponents) {
+                            matched = (baseResolved.path, baseResolved.pathComponents.count, candidatePrefixed.pathComponents)
+                            break
+                        }
+                    }
+                    if baseStandard.path.hasPrefix(alias) {
+                        let basePrefixed = URL(fileURLWithPath: canonical + baseStandard.path.dropFirst(alias.count)).standardized
+                        if targetStandard.pathComponents.starts(with: basePrefixed.pathComponents) {
+                            matched = (basePrefixed.path, basePrefixed.pathComponents.count, targetStandard.pathComponents)
+                            break
+                        }
+                    }
+                }
+            }
+
+            guard let m = matched else { return false }
+            matchedBase = m.base
+            baseCount = m.count
+            targetComps = m.comps
+        }
 
         // The system supplies the application-support base. Validate that base
         // and every directory below it, not unrelated ancestors such as `/`,
         // which is correctly owned by root and made every read fail.
-        var directoryPaths = [URL(fileURLWithPath: basePath).standardized.path]
-        var currentPath = directoryPaths[0]
-        for component in targetComponents.dropFirst(baseComponents.count).dropLast() {
+        var directoryPaths = [matchedBase]
+        var currentPath = matchedBase
+        for component in targetComps.dropFirst(baseCount).dropLast() {
             currentPath = URL(fileURLWithPath: currentPath)
                 .appendingPathComponent(component, isDirectory: true).path
             directoryPaths.append(currentPath)
