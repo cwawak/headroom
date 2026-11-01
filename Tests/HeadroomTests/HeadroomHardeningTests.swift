@@ -400,8 +400,43 @@ final class HeadroomHardeningTests: XCTestCase {
         provider.customAgentModeRoot = tempDir.appendingPathComponent("MissingAgentMode")
 
         let snap = try! provider.snapshot()
-        // The file should have been skipped, resulting in 0 rawWeighted usage
-        XCTAssertEqual(snap.rawWeighted?[.short], 0)
+        if case .unavailable(let reason) = snap.readings[.short] {
+            XCTAssertTrue(reason.contains("insecure file permissions"))
+        } else {
+            XCTFail("Expected snapshot to be unavailable when log file has insecure permissions")
+        }
+    }
+
+    func testClaudeRecoveryAfterDirectoryPermissionsRepaired() {
+        let projectsDir = tempDir.appendingPathComponent(".claude/projects")
+        let subDir = projectsDir.appendingPathComponent("repaired_project")
+        createSecureDirectory(at: subDir)
+
+        let logFile = subDir.appendingPathComponent("session.jsonl")
+        let record = "{\"timestamp\":\"2025-01-01T00:00:00Z\",\"requestId\":\"r1\",\"message\":{\"model\":\"claude-3-sonnet\",\"usage\":{\"input_tokens\":100,\"output_tokens\":50}}}\n"
+        try! record.write(to: logFile, atomically: true, encoding: .utf8)
+
+        // Make subDir world-writable initially
+        try! FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: subDir.path)
+
+        let provider = ClaudeProvider()
+        provider.customProjectsRoot = projectsDir
+        provider.customAgentModeRoot = tempDir.appendingPathComponent("MissingAgentMode")
+
+        // 1. Initial snapshot fails with insecure directory chain
+        let snap1 = try! provider.snapshot()
+        if case .unavailable(let reason) = snap1.readings[.short] {
+            XCTAssertTrue(reason.contains("insecure directory chain"))
+        } else {
+            XCTFail("Expected unavailable reading due to insecure directory chain")
+        }
+
+        // 2. Repair directory permissions
+        try! FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: subDir.path)
+
+        // 3. Subsequent snapshot on the same provider instance recovers successfully
+        let snap2 = try! provider.snapshot()
+        XCTAssertNotNil(snap2.rawWeighted?[.short], "Snapshot should recover valid readings once directory permissions are repaired")
     }
 
     // MARK: - CodexProvider Hardening Tests

@@ -109,6 +109,9 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         let now = customNow ?? Date()
         let cutoff = now.addingTimeInterval(-retention)
 
+        isIngestionIncomplete = false
+        incompleteReason = nil
+
         ingestNewBytes(now: now, cutoff: cutoff)
 
         // Prune retained usage entries and deduplication state consistently
@@ -325,27 +328,45 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
     }
 
     private func ingestFile(at path: String, now: Date, cutoff: Date) {
-        guard PosixSecurity.verifyACLSafety(path: path) else { return }
+        guard PosixSecurity.verifyACLSafety(path: path) else {
+            isIngestionIncomplete = true
+            incompleteReason = "insecure ACL on log file: \(path)"
+            return
+        }
 
         let flags = O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
         let fd = open(path, flags)
-        guard fd >= 0 else { return }
+        guard fd >= 0 else {
+            isIngestionIncomplete = true
+            incompleteReason = "failed to open log file securely: \(path)"
+            return
+        }
         defer { close(fd) }
 
         var st = stat()
-        guard fstat(fd, &st) == 0 else { return }
+        guard fstat(fd, &st) == 0 else {
+            isIngestionIncomplete = true
+            incompleteReason = "failed to stat descriptor for log file: \(path)"
+            return
+        }
 
         guard (st.st_mode & S_IFMT) == S_IFREG else {
+            isIngestionIncomplete = true
+            incompleteReason = "not a regular file: \(path)"
             return
         }
 
         // Must be owned by current effective user
         guard st.st_uid == geteuid() else {
+            isIngestionIncomplete = true
+            incompleteReason = "untrusted file owner for log file: \(path)"
             return
         }
 
         // Must not have group or other write permission
         guard (st.st_mode & 0o022) == 0 else {
+            isIngestionIncomplete = true
+            incompleteReason = "insecure file permissions: \(path)"
             return
         }
 
