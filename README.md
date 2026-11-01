@@ -44,7 +44,7 @@ This fork accumulates significant enhancements and architectural refinements ove
 | --- | --- | --- | --- |
 | **Codex** | `~/.codex/sessions/**/rollout-*.jsonl` | **exact** | Authoritative. The server computes `used_percent` and Codex logs it directly. |
 | **Claude** | `~/.claude/projects/**/*.jsonl` | **estimated** | Weighted token ledger divided by a calibrated capacity. |
-| **Antigravity** | `state.vscdb` (detected) | **none** | Displays quota status only; does not log balances locally. |
+| **Antigravity** | Local language server daemon | **exact** | Authoritative. The local daemon exposes `RetrieveUserQuotaSummary` on loopback. |
 
 Everything shown in the UI represents **remaining quota**. A reading of "73% left" strictly means 73% remains before exhaustion.
 
@@ -57,9 +57,9 @@ Everything shown in the UI represents **remaining quota**. A reading of "73% lef
   3. Enter the session and weekly "% used" figures and configure the weekly reset day and hour.
   4. Calibration also factors in token usage from Claude Desktop agent sessions (`~/Library/Application Support/Claude/local-agent-mode-sessions/**/audit.jsonl`). Note that `claude.ai` and standard Claude desktop usage outside agent mode do not log locally and represent an irreducible blind spot between calibrations.
 
-### Why Antigravity Shows No Quota
+### Antigravity Support
 
-Google's Antigravity client stores quota sentinels in `state.vscdb` rather than local percentages, fetching live quota on demand via authenticated API endpoints. Querying those endpoints would require intercepting and using your private OAuth credentials. Headroom strictly adheres to local-only, non-network introspection. Antigravity is detected when installed, and the menu explicitly notes why numbers cannot be displayed.
+Antigravity runs a local background language server daemon on loopback (`127.0.0.1`) that exposes `RetrieveUserQuotaSummary`. Headroom queries this local daemon directly — requiring no external network calls, no cloud API keys, and zero token consumption — to report exact 5-hour and weekly remaining quotas with reset timers. Headroom watches `~/.gemini/antigravity/conversations` for real-time turn activity. Standalone installations without a running Antigravity daemon prompt you to launch Antigravity to refresh.
 
 ---
 

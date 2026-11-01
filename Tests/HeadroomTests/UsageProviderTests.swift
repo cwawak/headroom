@@ -74,6 +74,10 @@ final class UsageProviderTests: XCTestCase {
         XCTAssertTrue(claude.canReportUsage, "ClaudeProvider should return true for default canReportUsage")
 
         let antigravity = AntigravityProvider()
-        XCTAssertFalse(antigravity.canReportUsage, "AntigravityProvider should return false for custom canReportUsage")
+        if antigravity.isInstalled() {
+            XCTAssertTrue(antigravity.canReportUsage, "AntigravityProvider should return true when Antigravity is installed")
+        } else {
+            XCTAssertFalse(antigravity.canReportUsage, "AntigravityProvider should return false when Antigravity is not installed")
+        }
     }
 }
