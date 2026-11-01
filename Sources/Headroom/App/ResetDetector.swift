@@ -10,14 +10,22 @@ final class ResetDetector: @unchecked Sendable {
     }
 
     private var previousReadings: [ProviderID: [QuotaWindow: (usedPercent: Double, resetsAt: Date?)]] = [:]
-    private let center: UNUserNotificationCenter
+    private let center: UNUserNotificationCenter?
+    private let onNotification: (@Sendable (ResetType) -> Void)?
 
-    init(center: UNUserNotificationCenter = .current()) {
+    init(center: UNUserNotificationCenter? = Self.defaultCenter(), onNotification: (@Sendable (ResetType) -> Void)? = nil) {
         self.center = center
+        self.onNotification = onNotification
+    }
+
+    /// In testing or command line tools without an app bundle, UNUserNotificationCenter.current() throws NSInternalInconsistencyException.
+    private static func defaultCenter() -> UNUserNotificationCenter? {
+        guard Bundle.main.bundleIdentifier != nil else { return nil }
+        return UNUserNotificationCenter.current()
     }
 
     func requestAuthorization() {
-        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        center?.requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
     func inspect(snapshots: [ProviderID: Snapshot], now: Date = Date()) -> [ResetType] {
@@ -65,6 +73,9 @@ final class ResetDetector: @unchecked Sendable {
     }
 
     private func postNotification(for reset: ResetType) {
+        onNotification?(reset)
+        guard let center else { return }
+
         let content = UNMutableNotificationContent()
         switch reset {
         case .normal(let provider, let window):

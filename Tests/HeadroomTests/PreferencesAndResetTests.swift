@@ -54,7 +54,10 @@ final class PreferencesAndResetTests: XCTestCase {
     }
 
     func testResetDetectorIdentifiesAbnormalFreeReset() {
-        let detector = ResetDetector()
+        var notifiedResets: [ResetDetector.ResetType] = []
+        let detector = ResetDetector(center: nil, onNotification: { reset in
+            notifiedResets.append(reset)
+        })
         let now = Date(timeIntervalSince1970: 1700000000)
         let futureReset = now.addingTimeInterval(7200)
 
@@ -71,6 +74,7 @@ final class PreferencesAndResetTests: XCTestCase {
 
         let initial = detector.inspect(snapshots: snap1, now: now)
         XCTAssertTrue(initial.isEmpty)
+        XCTAssertTrue(notifiedResets.isEmpty)
 
         // Mid-window reset to 0% before reset time
         let snap2 = [
@@ -86,6 +90,7 @@ final class PreferencesAndResetTests: XCTestCase {
 
         let resets = detector.inspect(snapshots: snap2, now: now.addingTimeInterval(300))
         XCTAssertEqual(resets.count, 1)
+        XCTAssertEqual(notifiedResets.count, 1)
         if case .abnormalFreeReset(let provider, let window, let drop) = resets[0] {
             XCTAssertEqual(provider, .codex)
             XCTAssertEqual(window, .short)
