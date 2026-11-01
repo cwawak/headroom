@@ -515,7 +515,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private static func percent(from text: String) -> Double? {
+    /// Accepts "54", "54%", " 54 % " — people paste what they see.
+    nonisolated static func percent(from text: String) -> Double? {
         let cleaned = text.replacingOccurrences(of: "%", with: "")
             .trimmingCharacters(in: .whitespaces)
         guard let v = Double(cleaned), v > 0, v <= 100 else { return nil }

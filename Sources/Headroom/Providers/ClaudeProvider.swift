@@ -127,7 +127,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
 
         let session = currentSession(now: now)
         let weekStart = weeklyWindowStart(now: now, calibration: calibration)
-        let weekSum = entries.filter { $0.date >= weekStart }.reduce(0) { $0 + $1.weight }
+        let weekSum = entries.reduce(0) { $0 + ($1.date >= weekStart ? $1.weight : 0) }
 
         learn(&calibration, sessionSum: session.sum, weekSum: weekSum, weekStart: weekStart)
 
@@ -194,7 +194,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
 
     private func weekSum(at t: Date, calibration: Calibration) -> Double {
         let start = weeklyWindowStart(now: t, calibration: calibration)
-        return entries.filter { $0.date >= start && $0.date <= t }.reduce(0) { $0 + $1.weight }
+        return entries.reduce(0) { $0 + ($1.date >= start && $1.date <= t ? $1.weight : 0) }
     }
 
     // MARK: - Calibration from observed rejections
@@ -209,8 +209,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             let from = r.date.addingTimeInterval(-span)
             guard let oldest = entries.first?.date, from >= oldest else { continue }
             let observed = entries
-                .filter { $0.date >= from && $0.date <= r.date }
-                .reduce(0) { $0 + $1.weight }
+                .reduce(0) { $0 + ($1.date >= from && $1.date <= r.date ? $1.weight : 0) }
             guard observed > 0 else { continue }
             calibration.fold(observed, into: r.window)
             newest = max(newest, r.date.timeIntervalSince1970)
@@ -256,6 +255,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
     private static let usageMarker = Data("\"usage\"".utf8)
     private static let quotaMarker = Data("quotaLimits".utf8)
     private static let rateInfoMarker = Data("rate_limit_info".utf8)
+    private static let jsonDecoder = JSONDecoder()
 
     private func validateSourceRoot(_ root: URL) -> Bool {
         let path = root.path
@@ -274,7 +274,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         return true
     }
 
-    private static func isSecureChild(baseRoot: String, candidatePath: String) -> Bool {
+    static func isSecureChild(baseRoot: String, candidatePath: String) -> Bool {
         // macOS aliases `/var` to `/private/var`; FileManager may enumerate a
         // temporary path using the latter even when the caller supplied the
         // former. Resolve both sides before comparing. Resolving the candidate
@@ -382,58 +382,77 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             let chunkStartOffset = currentOffset
             currentOffset += UInt64(bytesRead)
 
-            // Process buffer with leftover
-            let buffer = state.leftover + chunkData
-            state.leftover = Data()
+            processBuffer(
+                chunkData: chunkData,
+                chunkStartOffset: chunkStartOffset,
+                currentOffset: currentOffset,
+                state: &state,
+                now: now,
+                cutoff: cutoff,
+                path: path
+            )
+        }
 
-            var searchIndex = 0
+        fileStates[path] = state
+    }
 
-            while searchIndex < buffer.count {
-                if state.discardingOversizedLine {
-                    if let newlineRel = buffer[searchIndex...].firstIndex(of: 0x0A) {
-                        searchIndex = newlineRel + 1
-                        state.discardingOversizedLine = false
-                        // Update offset to end of discarded line
-                        if searchIndex >= (buffer.count - chunkData.count) {
-                            let consumedInChunk = searchIndex - (buffer.count - chunkData.count)
-                            state.offset = chunkStartOffset + UInt64(consumedInChunk)
-                        }
-                    } else {
-                        searchIndex = buffer.count
-                        state.offset = currentOffset
+    private func processBuffer(
+        chunkData: Data,
+        chunkStartOffset: UInt64,
+        currentOffset: UInt64,
+        state: inout FileState,
+        now: Date,
+        cutoff: Date,
+        path: String
+    ) {
+        let buffer = state.leftover + chunkData
+        state.leftover = Data()
+
+        var searchIndex = 0
+
+        while searchIndex < buffer.count {
+            if state.discardingOversizedLine {
+                if let newlineRel = buffer[searchIndex...].firstIndex(of: 0x0A) {
+                    searchIndex = newlineRel + 1
+                    state.discardingOversizedLine = false
+                    // Update offset to end of discarded line
+                    if searchIndex >= (buffer.count - chunkData.count) {
+                        let consumedInChunk = searchIndex - (buffer.count - chunkData.count)
+                        state.offset = chunkStartOffset + UInt64(consumedInChunk)
                     }
                 } else {
-                    if let newlineRel = buffer[searchIndex...].firstIndex(of: 0x0A) {
-                        let line = buffer[searchIndex..<newlineRel]
-                        if line.count > Self.maxRecordSize {
-                            isIngestionIncomplete = true
-                            incompleteReason = "oversized log record (>8 MiB) in \(path)"
-                        } else {
-                            parseLine(line, now: now, cutoff: cutoff)
-                        }
-                        searchIndex = newlineRel + 1
-                        if searchIndex >= (buffer.count - chunkData.count) {
-                            let consumedInChunk = searchIndex - (buffer.count - chunkData.count)
-                            state.offset = chunkStartOffset + UInt64(consumedInChunk)
-                        }
+                    searchIndex = buffer.count
+                    state.offset = currentOffset
+                }
+            } else {
+                if let newlineRel = buffer[searchIndex...].firstIndex(of: 0x0A) {
+                    let line = buffer[searchIndex..<newlineRel]
+                    if line.count > Self.maxRecordSize {
+                        isIngestionIncomplete = true
+                        incompleteReason = "oversized log record (>8 MiB) in \(path)"
                     } else {
-                        let remaining = buffer[searchIndex...]
-                        if remaining.count > Self.maxRecordSize {
-                            isIngestionIncomplete = true
-                            incompleteReason = "oversized log record (>8 MiB) in \(path)"
-                            state.discardingOversizedLine = true
-                            searchIndex = buffer.count
-                            state.offset = currentOffset
-                        } else {
-                            state.leftover = Data(remaining)
-                            searchIndex = buffer.count
-                        }
+                        parseLine(line, now: now, cutoff: cutoff)
+                    }
+                    searchIndex = newlineRel + 1
+                    if searchIndex >= (buffer.count - chunkData.count) {
+                        let consumedInChunk = searchIndex - (buffer.count - chunkData.count)
+                        state.offset = chunkStartOffset + UInt64(consumedInChunk)
+                    }
+                } else {
+                    let remaining = buffer[searchIndex...]
+                    if remaining.count > Self.maxRecordSize {
+                        isIngestionIncomplete = true
+                        incompleteReason = "oversized log record (>8 MiB) in \(path)"
+                        state.discardingOversizedLine = true
+                        searchIndex = buffer.count
+                        state.offset = currentOffset
+                    } else {
+                        state.leftover = Data(remaining)
+                        searchIndex = buffer.count
                     }
                 }
             }
         }
-
-        fileStates[path] = state
     }
 
     private func parseLine(_ lineSlice: Data.SubSequence, now: Date, cutoff: Date) {
@@ -445,8 +464,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
                     || data.range(of: Self.rateInfoMarker) != nil
         guard hasUsage || hasQuota else { return }
 
-        let decoder = JSONDecoder()
-        guard let row = try? decoder.decode(ClaudeRow.self, from: data),
+        guard let row = try? Self.jsonDecoder.decode(ClaudeRow.self, from: data),
               let date = row.date else { return }
 
         if date < cutoff {
