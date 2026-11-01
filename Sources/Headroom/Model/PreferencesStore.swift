@@ -1,7 +1,7 @@
 import Foundation
 
 /// Persistent user preferences for displaying providers and quota windows.
-struct PreferencesStore: Sendable {
+final class PreferencesStore: @unchecked Sendable {
     private static let hiddenProvidersKey = "Headroom.hiddenProviders"
     private static let hiddenShortLimitsKey = "Headroom.hiddenShortLimits"
 

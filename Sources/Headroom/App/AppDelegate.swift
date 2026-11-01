@@ -336,7 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let raw = sender.representedObject as? String,
               let provider = ProviderID(rawValue: raw) else { return }
         let currentHidden = preferences.isShortLimitHidden(for: provider)
-        preferences.setShortLimitHidden(provider, hidden: !currentHidden)
+        preferences.setShortLimitHidden(for: provider, hidden: !currentHidden)
         rebuildMenu()
     }
 
