@@ -28,6 +28,7 @@ final class AntigravityProvider: UsageProvider, @unchecked Sendable {
 
     // Testing overrides
     var customHome: URL?
+    var customInstall: Install?
     var customProbe: (@Sendable () -> ([QuotaWindow: Reading], Date?)?)?
     var customNow: Date?
 
@@ -49,6 +50,7 @@ final class AntigravityProvider: UsageProvider, @unchecked Sendable {
     }
 
     var install: Install {
+        if let customInstall { return customInstall }
         let appSupport = home.appendingPathComponent("Library/Application Support/Antigravity", isDirectory: true)
         let candidates = [
             antigravityRoot,
@@ -90,17 +92,6 @@ final class AntigravityProvider: UsageProvider, @unchecked Sendable {
     func snapshot() throws -> Snapshot {
         let now = customNow ?? Date()
 
-        guard isInstalled() else {
-            return Snapshot(
-                provider: id,
-                readings: Self.unavailable("not installed"),
-                capturedAt: now,
-                sourceDate: nil,
-                planLabel: nil,
-                rawWeighted: nil
-            )
-        }
-
         // Testing override
         if let customProbe {
             if let (readings, sourceDate) = customProbe() {
@@ -122,6 +113,17 @@ final class AntigravityProvider: UsageProvider, @unchecked Sendable {
                     rawWeighted: nil
                 )
             }
+        }
+
+        guard isInstalled() else {
+            return Snapshot(
+                provider: id,
+                readings: Self.unavailable("not installed"),
+                capturedAt: now,
+                sourceDate: nil,
+                planLabel: nil,
+                rawWeighted: nil
+            )
         }
 
         lock.lock()

@@ -124,15 +124,15 @@ final class AntigravityProviderTests: XCTestCase {
 
         let provider = AntigravityProvider()
         provider.customHome = tempDir
+        provider.customInstall = AntigravityProvider.Install.none
 
-        if !provider.isInstalled() {
-            let snap = try provider.snapshot()
-            XCTAssertEqual(snap.readings[.short]?.percentRemaining, nil)
-            if case .unavailable(let reason) = snap.readings[.short]! {
-                XCTAssertEqual(reason, "not installed")
-            } else {
-                XCTFail("Expected .unavailable reading")
-            }
+        XCTAssertFalse(provider.isInstalled())
+        let snap = try provider.snapshot()
+        XCTAssertEqual(snap.readings[.short]?.percentRemaining, nil)
+        if case .unavailable(let reason) = snap.readings[.short]! {
+            XCTAssertEqual(reason, "not installed")
+        } else {
+            XCTFail("Expected .unavailable reading")
         }
     }
 
