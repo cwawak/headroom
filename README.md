@@ -1,224 +1,157 @@
-# Headroom
+# Headroom (Fork)
+
+> [!WARNING]
+> **FORK NOTICE & NO SUPPORT DISCLAIMER**
+>
+> This repository is an independent **fork** of the original [Headroom project](https://github.com/vinaybhaskarla/headroom).
+>
+> **NO SUPPORT IS PROVIDED.** This software is maintained purely on an as-is, best-effort basis for personal and community use. There are **no warranties, no SLAs, no guarantees of bug fixes, updates, or feature additions, and no official customer or technical support**. If something does not work in your setup, you are expected to debug, fix, and adapt the code yourself. Issues and pull requests may be ignored or closed without response. Use entirely at your own risk.
+
+---
 
 How much AI quota you have left, in your macOS menu bar.
 
-A gauge needle shows the agent you're currently using; click it for per-agent
-detail with animated drain capsules. It reads only the logs those tools already
-write to your disk — **no network, no credentials, no API keys, and it consumes
-none of your tokens.**
+A gauge needle displays the quota status of the agent you are actively using (or the agent closest to exhaustion); clicking reveals detailed per-agent quota breakdowns with animated drain capsules. It reads only the local disk logs that CLI tools already write to disk — **no network calls, no credentials, no API keys, and zero token consumption.**
 
-Requires macOS 14+.
+Requires macOS 14 (Sonoma) or newer.
 
 ![The Headroom menu, showing Codex and Claude quota](docs/menu.png)
 
-## Install
+---
 
-Download `Headroom.dmg` or `Headroom.app.zip` from [Releases](../../releases), drag it to Applications,
-and launch. It's a menu bar app — no Dock icon. Signed and notarized releases (or automated unsigned build releases) are available under Releases.
+## What's New in this Fork
 
-## Agent support
+This fork accumulates significant enhancements and architectural refinements over upstream:
 
-| Agent | Source | Accuracy |
-| --- | --- | --- |
-| **Codex** | `~/.codex/sessions/**/rollout-*.jsonl` | **exact** — the server computes `used_percent` and Codex writes it down |
-| **Claude** | `~/.claude/projects/**/*.jsonl` | **estimated** — a weighted token ledger divided by a capacity you calibrate |
-| **Antigravity** | — | **none** — see below |
+- **Provider Display Preferences**: Toggle individual AI providers (Codex, Claude, Antigravity) on or off directly from the menu bar preferences without restarting.
+- **Short-Limit Toggling**: Option to hide the 5-hour rolling limit per provider to keep the menu clean and focus primarily on weekly quota limits.
+- **Quota Rollover & Early Reset Detection (`ResetDetector`)**:
+  - Automatically identifies scheduled quota rollover deadlines.
+  - Detects **abnormal/free resets** (early drops of 5%+ in usage before the scheduled reset time).
+  - Delivers native macOS user notifications via `UNUserNotificationCenter` when resets occur.
+- **Automated CI/CD Release Packaging**:
+  - Unsigned, ready-to-run `.dmg` and `.app.zip` release artifacts created automatically on version tags via GitHub Actions (`package-release.sh`).
+  - No developer account or notarization required for self-hosted distribution or local workflows.
+- **Robustness & Hardening**:
+  - TOCTOU-safe path resolution and path traversal protections.
+  - Resilient FSEvents watcher with throttled debouncing (minimum 6s scan interval) and a slow background safety timer to prevent battery drain and runaway CPU usage.
 
-Everything the UI shows reads as **remaining**. "73% left" means 73% left.
+---
 
-### Why Claude needs calibrating and Codex doesn't
+## Agent Support & Epistemics
 
-Codex reports the same percentage the server enforces, so there is nothing to
-estimate and nothing to calibrate.
+| Agent | Source | Accuracy | Notes |
+| --- | --- | --- | --- |
+| **Codex** | `~/.codex/sessions/**/rollout-*.jsonl` | **exact** | Authoritative. The server computes `used_percent` and Codex logs it directly. |
+| **Claude** | `~/.claude/projects/**/*.jsonl` | **estimated** | Weighted token ledger divided by a calibrated capacity. |
+| **Antigravity** | `state.vscdb` (detected) | **none** | Displays quota status only; does not log balances locally. |
 
-Claude Code logs exact per-message token counts and never logs the limit those
-counts are measured against. So Headroom computes a numerator and has to learn
-the denominator. Run **Calibrate from Claude's usage page…** once: open
-Claude → Settings → Usage, enter the two "% used" figures, and set the weekly
-reset day and hour to match the "Resets …" line shown there.
+Everything shown in the UI represents **remaining quota**. A reading of "73% left" strictly means 73% remains before exhaustion.
 
-Calibrating also captures usage from claude.ai and the Claude desktop app. Those
-share your plan limit but never appear in the local Claude Code logs, so they are
-an irreducible blind spot between calibrations.
+### Why Claude Needs Calibration (and Codex Doesn't)
 
-Headroom additionally reads Claude Desktop's agent-mode transcripts
-(`~/Library/Application Support/Claude/local-agent-mode-sessions/**/audit.jsonl`),
-which are disjoint from `~/.claude/projects` — verified by session id and record
-uuid, neither of which appears in both — and therefore represent real consumption
-that would otherwise be missed. Those logs are also the only place Anthropic has
-been observed writing an exact `utilization` fraction, which Headroom folds into
-the calibration when it appears. The catch: `utilization` is emitted only once a
-window passes ~90%, so it sharpens the estimate rather than replacing it.
+- **Codex**: Reports the exact percentage enforced by OpenAI's servers. There is nothing to calibrate. Headroom parses the latest session log (sorted by modification time, scanning backward for non-null primary limits) to show exact values.
+- **Claude Code**: Logs exact per-message token counts but *never* writes the quota limit against which those counts are measured. Headroom computes the numerator from local transcripts and needs to learn the denominator:
+  1. Open **Calibrate from Claude's usage page…** from the Headroom menu.
+  2. Navigate to Claude → Settings → Usage in your browser.
+  3. Enter the session and weekly "% used" figures and configure the weekly reset day and hour.
+  4. Calibration also factors in token usage from Claude Desktop agent sessions (`~/Library/Application Support/Claude/local-agent-mode-sessions/**/audit.jsonl`). Note that `claude.ai` and standard Claude desktop usage outside agent mode do not log locally and represent an irreducible blind spot between calibrations.
 
-### Why Antigravity shows nothing
+### Why Antigravity Shows No Quota
 
-Antigravity *displays* quota and neither *stores* it locally on disk — verified
-rather than assumed. Antigravity's `state.vscdb` has one quota-shaped key, `modelCredits`,
-which decodes to credit sentinels rather than percentages. The panes carry a
-refresh button and an "Updated just now" line: numbers are fetched live per view.
+Google's Antigravity client stores quota sentinels in `state.vscdb` rather than local percentages, fetching live quota on demand via authenticated API endpoints. Querying those endpoints would require intercepting and using your private OAuth credentials. Headroom strictly adheres to local-only, non-network introspection. Antigravity is detected when installed, and the menu explicitly notes why numbers cannot be displayed.
 
-Reading them would mean calling Google's endpoint with your OAuth token. This
-project doesn't do that for Claude and doesn't do it here either.
+---
 
-Agents that are detected but unreadable get one explanatory line in the menu, so
-a missing agent reads as "looked for, here's why" rather than as a bug.
+## Installation
 
-## Build
+### Pre-built Binaries
+Download the latest `Headroom.dmg` or `Headroom.app.zip` from [Releases](../../releases).
+Drag `Headroom.app` into `/Applications` and launch it.
+
+*Note for macOS Gatekeeper:* If running an unsigned release build, you may need to right-click the app and choose **Open**, or allow it in **System Settings → Privacy & Security**.
+
+---
+
+## Building from Source
+
+### Prerequisites
+- macOS 14.0+
+- Xcode 15+ or Swift 6.0+ toolchain
+
+### Build Commands
 
 ```bash
+# Build an unsigned .app bundle in .build/Headroom.app
 ./scripts/bundle.sh
-```
 
-```bash
+# Build a drag-to-Applications DMG and zip package (unsigned)
 ./scripts/package-release.sh
-```
 
-```bash
+# Build, sign with Developer ID, harden runtime, and notarize (requires Apple Dev cert)
 ./scripts/release.sh
-```
-
-```bash
 ./scripts/release.sh notarize
 ```
 
-`package-release.sh` builds an unsigned `Headroom.dmg` and `Headroom.app.zip` release package without developer identity or notarization requirements (used in automated GitHub Actions releases).
+### Command Line Tools & Diagnostics
 
-## Releases
-
-`CFBundleShortVersionString` in `Resources/Info.plist` is the release version.
-When a new version reaches `main`, GitHub Actions creates the corresponding
-`v<version>` tag if it does not already exist. That tag triggers a clean macOS
-build and test run, creates the GitHub Release, and attaches `Headroom.dmg` and
-`Headroom.app.zip`. A `v*` tag pushed directly follows the same build-and-release
-path; its version must match `Info.plist`.
+Headroom includes built-in command-line diagnostic tools:
 
 ```bash
+# Probe what providers and logs Headroom can currently see on your disk
 ./.build/release/Headroom --probe
+
+# Open the calibration sheet directly for UI inspection
+./.build/release/Headroom --demo-calibrate
+
+# Open the status menu directly for screenshot or visual check
+./.build/release/Headroom --demo-menu
 ```
 
-`bundle.sh` makes an unsigned `.app` for local development; `release.sh` signs and
-packages one. `--probe` prints what the providers can actually see and exits —
-when a vendor changes a log format, that's the fastest way to find out what broke.
+---
 
 ## Architecture
 
 | File | Role |
 | --- | --- |
-| `Model/Reading.swift` | the `Reading` enum — the epistemics of a number |
-| `Providers/CodexProvider.swift` | reverse-tail parser (authoritative) |
-| `Providers/ClaudeProvider.swift` | incremental token ledger (estimated) |
-| `Providers/Calibration.swift` | learns the limit Claude never writes down |
-| `Providers/AntigravityProvider.swift` | honest detection, no invented numbers |
-| `Watch/FileWatcher.swift` | one shared FSEvents stream |
-| `Render/MenuRowView.swift` | the animated drain capsule |
-| `App/AppDelegate.swift` | status item, menu, calibration sheet |
+| `Sources/Headroom/Model/Reading.swift` | The `Reading` enum representing epistemic certainty (`.authoritative`, `.estimated`, `.unavailable`). |
+| `Sources/Headroom/Model/PreferencesStore.swift` | Persistent user preferences for toggling providers and hiding short (5-hour) limits. |
+| `Sources/Headroom/App/ResetDetector.swift` | Scheduled rollover and abnormal early reset detection with macOS notifications. |
+| `Sources/Headroom/App/AppDelegate.swift` | Status item controller, dynamic NSMenu lifecycle, preferences submenus, and calibration modal. |
+| `Sources/Headroom/App/Probe.swift` | CLI diagnostic probe (`--probe`) inspecting provider state without launching the GUI. |
+| `Sources/Headroom/Providers/CodexProvider.swift` | Reverse-tail chronological parser reading authoritative Codex rollout logs. |
+| `Sources/Headroom/Providers/ClaudeProvider.swift` | Incremental ledger aggregating token counts across Claude Code and Desktop agent transcripts. |
+| `Sources/Headroom/Providers/Calibration.swift` | Exponential and moving-average model learning Claude capacity limits. |
+| `Sources/Headroom/Providers/AntigravityProvider.swift` | Honest detection without invented numbers or unauthorized network requests. |
+| `Sources/Headroom/Watch/FileWatcher.swift` | Centralized FSEvents stream monitoring log directories with throttled debouncing. |
+| `Sources/Headroom/Render/MenuRowView.swift` | Custom AppKit view rendering animated drain capsules and quota bars. |
 
-### Why `Reading` is not a `Double`
+---
 
-Codex hands you a server-computed percentage. Claude hands you raw token counts
-and hides the denominator. Collapsing both into one `percent: Double` forces you
-to invent numbers for Claude, which is how tools like this end up lying. A reading
-is `.authoritative`, `.estimated` (with a confidence), or `.unavailable` — and the
-UI always makes clear which it is showing.
+## Hard-Won Lessons & Engineering Notes
 
-## Things learned the hard way
+1. **Claude Code JSONL is not chronological**: 86% of records in real-world transcripts arrive out of order (backward jumps up to 21 hours) due to sub-agents, resumed sessions, and compaction. Logs must be read once and tracked by offset.
+2. **Resumed sessions continue appending to original folders**: Codex folders are timestamped `YYYY/MM/DD`, but resuming an old session writes into that older directory. Candidate logs must be ordered by modification time, not directory name.
+3. **Dual `rate_limits` shapes in Codex**: `limit_id: "codex"` has primary percentages; `limit_id: "premium"` carries credit sentinels. Backward scanning must skip non-primary limits.
+4. **Expired deadlines must not display stale percentages**: An expired `resetsAt` timestamp causes a stale 100% reading to falsely indicate blocking. Reset state must rollover cleanly.
+5. **Session windows vs. calendar windows**: Claude uses a 5-hour sliding session window from first interaction, alongside a weekly calendar window resetting at a designated day/time.
+6. **Throttling is mandatory**: File watchers triggering on busy CLI agents can consume 15%+ CPU if only debounced. A minimum 6-second scan interval floor keeps background consumption near 0%.
+7. **AppKit menu auto-enabling**: Submenu and custom view rows become greyed out unless `menu.autoenablesItems = false`.
+8. **App Sandbox is incompatible**: A sandboxed macOS app cannot read arbitrary directories like `~/.claude` or `~/.codex` without recurring file-picker permissions. Headroom operates outside the sandbox.
 
-Every one of these was a real bug found by running against live data, not a
-hypothetical:
+---
 
-1. **Claude Code's JSONL is not chronological.** Measured on real transcripts, 86%
-   of records arrive out of order with backward jumps of up to 21 hours, because
-   sidechains, resumed sessions and compaction all interleave. An earlier version
-   binary-searched by timestamp on the assumption that an append-only log is
-   ordered; it landed near EOF and under-counted the weekly total by 4.5x. Read
-   each file once, then only the bytes appended since.
-2. **A resumed session keeps writing to its original file.** Codex stores sessions
-   under `YYYY/MM/DD`, and the zero-padded names are chronological, so sorting the
-   directories by name looks like a free way to find the newest session. It isn't:
-   resume a four-day-old session and the freshest quota data on disk sits in the
-   oldest-looking folder. The name-sorted "winner" was days stale, its window had
-   expired, and the gauge reported "window reset" while Codex was running right
-   then. Sort candidates by modification time instead.
-3. **Codex emits two shapes of `rate_limits`.** `limit_id: "codex"` carries the
-   percentages; `limit_id: "premium"` carries credits and leaves `primary` null.
-   Taking the last `token_count` event shows an empty gauge about half the time.
-   Scan backward for the last event with a non-null `primary`.
-4. **An expired `resetsAt` is worse than no data.** These logs only advance while
-   the tool runs. Once the reset passes, a cached "100%" tells someone with a
-   fresh window that they're blocked. Report the reset instead.
-5. **The 5-hour limit is a session window, not a rolling one.** It opens on your
-   first message and runs five hours. Reconstructing the blocks and checking the
-   inferred reset against Claude's own countdown agreed to within four minutes.
-6. **The weekly limit is a fixed calendar window** ("Resets Fri 6:00 AM"), so the
-   reset day and hour decide which days get summed. It's configurable for exactly
-   that reason.
-7. **Debouncing isn't enough while an agent is running.** Its log is written
-   continuously, so a 400 ms debounce still fired several times a second at ~75 ms
-   per scan — 17% of a core, measured. A hard floor between scans drops it to 0%.
-   The gauge may lag a few seconds; it may not spin your fans.
-8. **Everything shows *remaining*, never *used*.** A capsule once filled to
-   "remaining" beside a label reading "used" — two contradictory statements at
-   once, with no way for the reader to tell which. `Reading` exposes
-   `percentUsed` and `percentRemaining` separately and only the latter is shown.
-9. **AppKit disables menu items that have no action**, so a menu full of data rows
-   renders entirely greyed out. `menu.autoenablesItems = false`.
-10. **`Calendar(identifier:)` with a nil locale silently returns abbreviated
-   weekday symbols** ("Fri"), which reads as a clipped label. `Calendar.current`
-   returns full names.
-11. **Anaconda ships its own `codesign`** that shadows Apple's on `PATH` and fails
-    with "arguments were not expected". The release script calls the system tools
-    by absolute path.
-12. **Stapling only the DMG isn't enough.** `spctl` passes the app via an *online*
-    lookup, but once dragged to `/Applications` it carries no ticket of its own, so
-    a first launch offline can hang. Notarise and staple the `.app` first, then
-    build the DMG around it.
+## Known Limitations
 
-## Distribution
+- **Estimated Claude quota**: Anthropic does not document exact token weightings across prompt cache hits, cache creations, and output tokens. Estimates may drift over time.
+- **claude.ai / web blind spots**: Web and non-agent mobile/desktop usage share account limits but do not emit local logs.
+- **Undocumented log formats**: Changes in provider log formats can degrade readings to "unavailable" until parsers are updated.
+- **No Official Support**: As noted above, this fork is provided as-is without support.
 
-`scripts/release.sh` builds, signs with Developer ID, hardens the runtime, adds a
-secure timestamp, and produces a drag-to-Applications `.dmg`.
-
-The signing identity is auto-detected when your keychain holds exactly one
-`Developer ID Application` certificate. Override with `HEADROOM_IDENTITY` when you
-have several.
-
-Notarisation needs an App Store Connect credential in your keychain. Create it
-once — it takes your Apple ID and an app-specific password, and nothing in this
-repo ever sees either:
-
-```bash
-xcrun notarytool store-credentials "Headroom" --apple-id "you@example.com" --team-id "YOURTEAMID"
-```
-
-### Why not the Mac App Store
-
-The App Store requires App Sandbox, and a sandboxed process cannot read
-`~/.claude`, `~/.codex` or `~/.gemini/antigravity` — which is the entire app. The only
-sandbox-legal route is `NSOpenPanel` plus security-scoped bookmarks, meaning the
-user hand-grants three hidden dotfolders on first run and re-grants them when the
-bookmarks go stale. Developer ID is the correct channel for a tool like this, not
-a fallback.
-
-## Known limitations
-
-- **Claude's figure is an estimate.** The weighting of cache reads, cache writes,
-  output tokens and model tier is not published, so the proxy drifts as the token
-  mix changes. Recalibrate now and then.
-- **claude.ai and the Claude desktop app are invisible** to the local logs but
-  share your plan limit.
-- **Log formats are undocumented** and can change without notice. Every parse is
-  fallible and degrades to "unavailable" rather than to a wrong number.
-- **Not sandboxed**, necessarily. If your Mac is under MDM restricting
-  non-App-Store apps, that's a separate gate.
-
-## `Attic/`
-
-Working, verified code the current design doesn't use — a notch-adjacent `NSPanel`
-at CGWindow layer 25 (the layer Control Center's own items occupy), its placement
-and contested-space arbitration, and a stacked multi-agent capsule renderer. It is
-not compiled. It was dropped for design reasons, not because it was broken; the
-comments explain what each piece solved.
+---
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT License. See [LICENSE](LICENSE) for details.
+Original work Copyright (c) 2026 Vinay Bhaskarla.
+Fork contributions Copyright (c) 2026 Christopher Wawak and contributors.
