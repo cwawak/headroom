@@ -382,58 +382,77 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             let chunkStartOffset = currentOffset
             currentOffset += UInt64(bytesRead)
 
-            // Process buffer with leftover
-            let buffer = state.leftover + chunkData
-            state.leftover = Data()
+            processBuffer(
+                chunkData: chunkData,
+                chunkStartOffset: chunkStartOffset,
+                currentOffset: currentOffset,
+                state: &state,
+                now: now,
+                cutoff: cutoff,
+                path: path
+            )
+        }
 
-            var searchIndex = 0
+        fileStates[path] = state
+    }
 
-            while searchIndex < buffer.count {
-                if state.discardingOversizedLine {
-                    if let newlineRel = buffer[searchIndex...].firstIndex(of: 0x0A) {
-                        searchIndex = newlineRel + 1
-                        state.discardingOversizedLine = false
-                        // Update offset to end of discarded line
-                        if searchIndex >= (buffer.count - chunkData.count) {
-                            let consumedInChunk = searchIndex - (buffer.count - chunkData.count)
-                            state.offset = chunkStartOffset + UInt64(consumedInChunk)
-                        }
-                    } else {
-                        searchIndex = buffer.count
-                        state.offset = currentOffset
+    private func processBuffer(
+        chunkData: Data,
+        chunkStartOffset: UInt64,
+        currentOffset: UInt64,
+        state: inout FileState,
+        now: Date,
+        cutoff: Date,
+        path: String
+    ) {
+        let buffer = state.leftover + chunkData
+        state.leftover = Data()
+
+        var searchIndex = 0
+
+        while searchIndex < buffer.count {
+            if state.discardingOversizedLine {
+                if let newlineRel = buffer[searchIndex...].firstIndex(of: 0x0A) {
+                    searchIndex = newlineRel + 1
+                    state.discardingOversizedLine = false
+                    // Update offset to end of discarded line
+                    if searchIndex >= (buffer.count - chunkData.count) {
+                        let consumedInChunk = searchIndex - (buffer.count - chunkData.count)
+                        state.offset = chunkStartOffset + UInt64(consumedInChunk)
                     }
                 } else {
-                    if let newlineRel = buffer[searchIndex...].firstIndex(of: 0x0A) {
-                        let line = buffer[searchIndex..<newlineRel]
-                        if line.count > Self.maxRecordSize {
-                            isIngestionIncomplete = true
-                            incompleteReason = "oversized log record (>8 MiB) in \(path)"
-                        } else {
-                            parseLine(line, now: now, cutoff: cutoff)
-                        }
-                        searchIndex = newlineRel + 1
-                        if searchIndex >= (buffer.count - chunkData.count) {
-                            let consumedInChunk = searchIndex - (buffer.count - chunkData.count)
-                            state.offset = chunkStartOffset + UInt64(consumedInChunk)
-                        }
+                    searchIndex = buffer.count
+                    state.offset = currentOffset
+                }
+            } else {
+                if let newlineRel = buffer[searchIndex...].firstIndex(of: 0x0A) {
+                    let line = buffer[searchIndex..<newlineRel]
+                    if line.count > Self.maxRecordSize {
+                        isIngestionIncomplete = true
+                        incompleteReason = "oversized log record (>8 MiB) in \(path)"
                     } else {
-                        let remaining = buffer[searchIndex...]
-                        if remaining.count > Self.maxRecordSize {
-                            isIngestionIncomplete = true
-                            incompleteReason = "oversized log record (>8 MiB) in \(path)"
-                            state.discardingOversizedLine = true
-                            searchIndex = buffer.count
-                            state.offset = currentOffset
-                        } else {
-                            state.leftover = Data(remaining)
-                            searchIndex = buffer.count
-                        }
+                        parseLine(line, now: now, cutoff: cutoff)
+                    }
+                    searchIndex = newlineRel + 1
+                    if searchIndex >= (buffer.count - chunkData.count) {
+                        let consumedInChunk = searchIndex - (buffer.count - chunkData.count)
+                        state.offset = chunkStartOffset + UInt64(consumedInChunk)
+                    }
+                } else {
+                    let remaining = buffer[searchIndex...]
+                    if remaining.count > Self.maxRecordSize {
+                        isIngestionIncomplete = true
+                        incompleteReason = "oversized log record (>8 MiB) in \(path)"
+                        state.discardingOversizedLine = true
+                        searchIndex = buffer.count
+                        state.offset = currentOffset
+                    } else {
+                        state.leftover = Data(remaining)
+                        searchIndex = buffer.count
                     }
                 }
             }
         }
-
-        fileStates[path] = state
     }
 
     private func parseLine(_ lineSlice: Data.SubSequence, now: Date, cutoff: Date) {
