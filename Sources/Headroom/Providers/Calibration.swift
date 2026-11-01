@@ -315,24 +315,7 @@ enum CalibrationStore {
         let fd = open(tmpPath, flags, mode)
         guard fd >= 0 else { return }
 
-        var writeSuccess = false
-        data.withUnsafeBytes { ptr in
-            guard let baseAddr = ptr.baseAddress else { return }
-            var written = 0
-            let total = data.count
-            while written < total {
-                let bytesWritten = write(fd, baseAddr.advanced(by: written), total - written)
-                if bytesWritten > 0 {
-                    written += bytesWritten
-                } else if bytesWritten < 0 {
-                    if errno == EINTR { continue }
-                    break
-                }
-            }
-            if written == total {
-                writeSuccess = true
-            }
-        }
+        let writeSuccess = writeData(data, to: fd)
         close(fd)
 
         guard writeSuccess else {
@@ -379,6 +362,22 @@ enum CalibrationStore {
         let fd = open(tmpPath, flags, mode)
         guard fd >= 0 else { return }
 
+        let writeSuccess = writeData(data, to: fd)
+        close(fd)
+
+        guard writeSuccess else {
+            unlink(tmpPath)
+            return
+        }
+
+        rename(tmpPath, destPath)
+    }
+
+    /// Writes the full contents of `data` to the given file descriptor, handling
+    /// partial writes and retrying on `EINTR`. Returns `true` if all bytes were
+    /// successfully written, or `false` on write error or premature termination.
+    @discardableResult
+    static func writeData(_ data: Data, to fd: Int32) -> Bool {
         var writeSuccess = false
         data.withUnsafeBytes { ptr in
             guard let baseAddr = ptr.baseAddress else { return }
@@ -397,13 +396,6 @@ enum CalibrationStore {
                 writeSuccess = true
             }
         }
-        close(fd)
-
-        guard writeSuccess else {
-            unlink(tmpPath)
-            return
-        }
-
-        rename(tmpPath, destPath)
+        return writeSuccess
     }
 }

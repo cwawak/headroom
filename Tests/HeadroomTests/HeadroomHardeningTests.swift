@@ -90,6 +90,53 @@ final class HeadroomHardeningTests: XCTestCase {
         XCTAssertEqual(loaded.shortCapacity, Calibration.seed.shortCapacity)
     }
 
+    // MARK: - CalibrationStore Save & WriteData Tests
+
+    func testCalibrationStoreSaveAndLoad() {
+        let appSupport = tempDir.appendingPathComponent("AppSupport")
+        CalibrationStore.customApplicationSupportDirectory = appSupport
+        defer { CalibrationStore.customApplicationSupportDirectory = nil }
+
+        let cal = Calibration(
+            shortCapacity: 12345,
+            longCapacity: 67890,
+            shortObservations: 3,
+            longObservations: 4,
+            weeklyResetWeekday: 2,
+            weeklyResetHour: 10,
+            lastRejectionFolded: 100,
+            lastUtilizationFolded: 200
+        )
+        CalibrationStore.save(cal)
+
+        let loaded = CalibrationStore.load()
+        XCTAssertEqual(loaded.shortCapacity, 12345)
+        XCTAssertEqual(loaded.longCapacity, 67890)
+        XCTAssertEqual(loaded.shortObservations, 3)
+        XCTAssertEqual(loaded.longObservations, 4)
+        XCTAssertEqual(loaded.weeklyResetWeekday, 2)
+        XCTAssertEqual(loaded.weeklyResetHour, 10)
+        XCTAssertEqual(loaded.lastRejectionFolded, 100)
+        XCTAssertEqual(loaded.lastUtilizationFolded, 200)
+    }
+
+    func testCalibrationStoreWriteDataSuccessAndFailure() {
+        let testFile = tempDir.appendingPathComponent("test_write.bin")
+        let fd = open(testFile.path, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        let sampleData = Data("hello calibration store".utf8)
+        let success = CalibrationStore.writeData(sampleData, to: fd)
+        close(fd)
+        XCTAssertTrue(success)
+
+        let readBack = try? Data(contentsOf: testFile)
+        XCTAssertEqual(readBack, sampleData)
+
+        // Invalid file descriptor should fail
+        let failResult = CalibrationStore.writeData(sampleData, to: -1)
+        XCTAssertFalse(failResult)
+    }
+
     // MARK: - ClaudeProvider Retention, Boundaries & Ingestion Tests
 
     func testRetentionAndFutureDatedRecords() {
@@ -261,5 +308,33 @@ final class HeadroomHardeningTests: XCTestCase {
         try! FileManager.default.createSymbolicLink(at: internalSymlink, withDestinationURL: insideFile)
 
         XCTAssertTrue(ClaudeProvider.isSecureChild(baseRoot: baseDir.path, candidatePath: internalSymlink.path))
+    }
+
+    // MARK: - ClaudeProvider Ingestion Hardening Tests
+
+    func testOversizedLogRecordHandling() {
+        let projectsDir = tempDir.appendingPathComponent(".claude/projects")
+        try? FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
+
+        let now = Date(timeIntervalSince1970: 1700000000)
+        let logFile = projectsDir.appendingPathComponent("oversized.jsonl")
+
+        // Write a log file with a single line exceeding 8 MiB (8 * 1024 * 1024 + 100 bytes) without newlines
+        let oversizedLength = 8 * 1024 * 1024 + 100
+        let paddingData = Data(repeating: UInt8(ascii: "a"), count: oversizedLength)
+        try! paddingData.write(to: logFile)
+
+        let provider = ClaudeProvider()
+        provider.customProjectsRoot = projectsDir
+        provider.customAgentModeRoot = tempDir.appendingPathComponent("MissingAgentMode")
+        provider.customNow = now
+
+        let snap = try! provider.snapshot()
+
+        if case .unavailable(let reason) = snap.readings[.short] {
+            XCTAssertTrue(reason.contains("oversized log record (>8 MiB)"))
+        } else {
+            XCTFail("Expected unavailable reading due to oversized log record")
+        }
     }
 }
