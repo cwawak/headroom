@@ -337,4 +337,147 @@ final class HeadroomHardeningTests: XCTestCase {
             XCTFail("Expected unavailable reading due to oversized log record")
         }
     }
+
+    func testClaudeDirectoryChainValidationRejectsInsecureSubdirectory() {
+        let projectsDir = tempDir.appendingPathComponent(".claude/projects")
+        let unsafeSubdir = projectsDir.appendingPathComponent("project_insecure")
+        try? FileManager.default.createDirectory(at: unsafeSubdir, withIntermediateDirectories: true)
+
+        let logFile = unsafeSubdir.appendingPathComponent("session.jsonl")
+        let record = "{\"timestamp\":\"2025-01-01T00:00:00Z\",\"requestId\":\"r1\",\"message\":{\"model\":\"claude-3-sonnet\",\"usage\":{\"input_tokens\":100,\"output_tokens\":50}}}\n"
+        try! record.write(to: logFile, atomically: true, encoding: .utf8)
+
+        // Make the subdirectory world-writable (violating PosixSecurity directory chain checks)
+        try! FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: unsafeSubdir.path)
+
+        let provider = ClaudeProvider()
+        provider.customProjectsRoot = projectsDir
+        provider.customAgentModeRoot = tempDir.appendingPathComponent("MissingAgentMode")
+
+        let snap = try! provider.snapshot()
+
+        if case .unavailable(let reason) = snap.readings[.short] {
+            XCTAssertTrue(reason.contains("insecure directory chain"))
+        } else {
+            XCTFail("Expected snapshot to be unavailable due to insecure directory chain")
+        }
+    }
+
+    func testClaudeIngestFileRejectsInsecureFilePermissions() {
+        let projectsDir = tempDir.appendingPathComponent(".claude/projects")
+        let subDir = projectsDir.appendingPathComponent("safe_project")
+        try? FileManager.default.createDirectory(at: subDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+
+        let logFile = subDir.appendingPathComponent("session.jsonl")
+        let record = "{\"timestamp\":\"2025-01-01T00:00:00Z\",\"requestId\":\"r1\",\"message\":{\"model\":\"claude-3-sonnet\",\"usage\":{\"input_tokens\":100,\"output_tokens\":50}}}\n"
+        try! record.write(to: logFile, atomically: true, encoding: .utf8)
+
+        // Make the file world-writable
+        try! FileManager.default.setAttributes([.posixPermissions: 0o666], ofItemAtPath: logFile.path)
+
+        let provider = ClaudeProvider()
+        provider.customProjectsRoot = projectsDir
+        provider.customAgentModeRoot = tempDir.appendingPathComponent("MissingAgentMode")
+
+        let snap = try! provider.snapshot()
+        // The file should have been skipped, resulting in 0 rawWeighted usage
+        XCTAssertEqual(snap.rawWeighted?[.short], 0)
+    }
+
+    // MARK: - CodexProvider Hardening Tests
+
+    func testCodexProviderRejectsSymlinkSessionsRoot() {
+        let realSessionsDir = tempDir.appendingPathComponent(".codex/real_sessions")
+        try? FileManager.default.createDirectory(at: realSessionsDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+
+        let symlinkSessionsDir = tempDir.appendingPathComponent(".codex/linked_sessions")
+        try? FileManager.default.createSymbolicLink(at: symlinkSessionsDir, withDestinationURL: realSessionsDir)
+
+        var provider = CodexProvider()
+        provider.customSessionsRoot = symlinkSessionsDir
+
+        XCTAssertFalse(provider.isInstalled(), "CodexProvider must reject sessionsRoot if it is a symbolic link")
+        let snap = try! provider.snapshot()
+        if case .unavailable(let reason) = snap.readings[.short] {
+            XCTAssertTrue(reason.contains("Codex not installed"))
+        } else {
+            XCTFail("Expected unavailable reading when sessionsRoot is a symlink")
+        }
+    }
+
+    func testCodexProviderRejectsInsecureDirectoryChain() throws {
+        let sessionsDir = tempDir.appendingPathComponent(".codex/sessions")
+        let dayDir = sessionsDir.appendingPathComponent("2025/01/15")
+        try FileManager.default.createDirectory(at: dayDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+
+        let rolloutFile = dayDir.appendingPathComponent("rollout-1.jsonl")
+        let resetsAt = Date().addingTimeInterval(3600).timeIntervalSince1970
+        let jsonRecord = "{\"timestamp\":\"2025-01-15T12:00:00Z\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"limit_id\":\"codex\",\"plan_type\":\"pro\",\"primary\":{\"used_percent\":25.0,\"window_minutes\":300,\"resets_at\":\(resetsAt)}}}}\n"
+        try jsonRecord.write(to: rolloutFile, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: rolloutFile.path)
+
+        // Make the day directory world-writable
+        try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: dayDir.path)
+
+        var provider = CodexProvider()
+        provider.customSessionsRoot = sessionsDir
+
+        let snap = try provider.snapshot()
+        if case .unavailable(let reason) = snap.readings[.short] {
+            XCTAssertTrue(reason.contains("No sessions yet") || reason.contains("No quota event"))
+        } else {
+            XCTFail("Expected snapshot to be unavailable when directory chain is insecure")
+        }
+    }
+
+    func testCodexProviderRejectsSymlinkedRolloutFile() throws {
+        let sessionsDir = tempDir.appendingPathComponent(".codex/sessions")
+        let dayDir = sessionsDir.appendingPathComponent("2025/01/15")
+        let outsideDir = tempDir.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: dayDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try FileManager.default.createDirectory(at: outsideDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+
+        let realFile = outsideDir.appendingPathComponent("real-rollout.jsonl")
+        let resetsAt = Date().addingTimeInterval(3600).timeIntervalSince1970
+        let jsonRecord = "{\"timestamp\":\"2025-01-15T12:00:00Z\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"limit_id\":\"codex\",\"plan_type\":\"pro\",\"primary\":{\"used_percent\":25.0,\"window_minutes\":300,\"resets_at\":\(resetsAt)}}}}\n"
+        try jsonRecord.write(to: realFile, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: realFile.path)
+
+        let symlinkedRolloutFile = dayDir.appendingPathComponent("rollout-1.jsonl")
+        try FileManager.default.createSymbolicLink(at: symlinkedRolloutFile, withDestinationURL: realFile)
+
+        var provider = CodexProvider()
+        provider.customSessionsRoot = sessionsDir
+
+        let snap = try provider.snapshot()
+        if case .unavailable(let reason) = snap.readings[.short] {
+            XCTAssertTrue(reason.contains("No sessions yet") || reason.contains("No quota event"))
+        } else {
+            XCTFail("Expected snapshot to be unavailable when rollout file is a symlink")
+        }
+    }
+
+    func testCodexProviderRejectsInsecureRolloutFilePermissions() throws {
+        let sessionsDir = tempDir.appendingPathComponent(".codex/sessions")
+        let dayDir = sessionsDir.appendingPathComponent("2025/01/15")
+        try FileManager.default.createDirectory(at: dayDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+
+        let rolloutFile = dayDir.appendingPathComponent("rollout-1.jsonl")
+        let resetsAt = Date().addingTimeInterval(3600).timeIntervalSince1970
+        let jsonRecord = "{\"timestamp\":\"2025-01-15T12:00:00Z\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"limit_id\":\"codex\",\"plan_type\":\"pro\",\"primary\":{\"used_percent\":25.0,\"window_minutes\":300,\"resets_at\":\(resetsAt)}}}}\n"
+        try jsonRecord.write(to: rolloutFile, atomically: true, encoding: .utf8)
+
+        // Make rollout file world-writable
+        try FileManager.default.setAttributes([.posixPermissions: 0o666], ofItemAtPath: rolloutFile.path)
+
+        var provider = CodexProvider()
+        provider.customSessionsRoot = sessionsDir
+
+        let snap = try provider.snapshot()
+        if case .unavailable(let reason) = snap.readings[.short] {
+            XCTAssertTrue(reason.contains("No sessions yet") || reason.contains("No quota event"))
+        } else {
+            XCTFail("Expected snapshot to be unavailable when rollout file has insecure permissions")
+        }
+    }
 }

@@ -313,12 +313,20 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
                     continue
                 }
 
+                guard PosixSecurity.verifyDirectoryChain(basePath: root.path, targetPath: candidatePath) else {
+                    isIngestionIncomplete = true
+                    incompleteReason = "insecure directory chain: \(candidatePath)"
+                    continue
+                }
+
                 ingestFile(at: candidatePath, now: now, cutoff: cutoff)
             }
         }
     }
 
     private func ingestFile(at path: String, now: Date, cutoff: Date) {
+        guard PosixSecurity.verifyACLSafety(path: path) else { return }
+
         let flags = O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
         let fd = open(path, flags)
         guard fd >= 0 else { return }
@@ -328,6 +336,16 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         guard fstat(fd, &st) == 0 else { return }
 
         guard (st.st_mode & S_IFMT) == S_IFREG else {
+            return
+        }
+
+        // Must be owned by current effective user
+        guard st.st_uid == geteuid() else {
+            return
+        }
+
+        // Must not have group or other write permission
+        guard (st.st_mode & 0o022) == 0 else {
             return
         }
 
