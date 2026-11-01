@@ -13,15 +13,19 @@ final class ResetDetector: @unchecked Sendable {
     private let center: UNUserNotificationCenter?
     private let onNotification: (@Sendable (ResetType) -> Void)?
 
-    init(center: UNUserNotificationCenter? = Self.defaultCenter(), onNotification: (@Sendable (ResetType) -> Void)? = nil) {
-        self.center = center
-        self.onNotification = onNotification
+    convenience init() {
+        let center: UNUserNotificationCenter?
+        if Bundle.main.bundleIdentifier != nil {
+            center = UNUserNotificationCenter.current()
+        } else {
+            center = nil
+        }
+        self.init(center: center, onNotification: nil)
     }
 
-    /// In testing or command line tools without an app bundle, UNUserNotificationCenter.current() throws NSInternalInconsistencyException.
-    private static func defaultCenter() -> UNUserNotificationCenter? {
-        guard Bundle.main.bundleIdentifier != nil else { return nil }
-        return UNUserNotificationCenter.current()
+    init(center: UNUserNotificationCenter?, onNotification: (@Sendable (ResetType) -> Void)? = nil) {
+        self.center = center
+        self.onNotification = onNotification
     }
 
     func requestAuthorization() {
