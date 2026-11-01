@@ -18,6 +18,7 @@ final class FileWatcherTests: XCTestCase {
             fireCount += 1
             expectation.fulfill()
         }
+        defer { watcher.stop() }
 
         // Simulate a rapid burst of 50 incoming FSEvents calls
         queue.async {
@@ -29,14 +30,13 @@ final class FileWatcherTests: XCTestCase {
         }
 
         waitForExpectations(timeout: 2.0)
-        XCTAssertEqual(fireCount, 1, "A rapid burst of events should be coalesced into a single trigger")
+        queue.sync {
+            XCTAssertEqual(fireCount, 1, "A rapid burst of events should be coalesced into a single trigger")
+        }
     }
 
     func testFileWatcherMaxDeferralForcesFireDuringSustainedEvents() {
         let queue = DispatchQueue(label: "com.headroom.test.sustained")
-        let expectation = expectation(description: "Watcher triggers during sustained event flow")
-        expectation.expectedFulfillmentCount = 2
-
         var fireCount = 0
         let watcher = FileWatcher(
             roots: [],
@@ -46,26 +46,29 @@ final class FileWatcherTests: XCTestCase {
             queue: queue
         ) {
             fireCount += 1
-            expectation.fulfill()
         }
+        defer { watcher.stop() }
 
-        // Continuously pump events every 20ms over a 250ms window.
-        // With debounceInterval 50ms, events never idle for 50ms, but maxDeferralInterval is 150ms.
-        // Therefore, it must force-fire before the burst finishes.
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        var count = 0
-        timer.schedule(deadline: .now(), repeating: .milliseconds(20))
-        timer.setEventHandler {
-            count += 1
-            watcher.handleEvent()
-            if count >= 15 {
-                timer.cancel()
+        // Simulate events every 20ms without letting the queue idle. Each burst
+        // must fire after the 150ms deferral limit, despite a 50ms debounce.
+        queue.sync {
+            let start = Date(timeIntervalSince1970: 1_700_000_000)
+            for index in 0..<8 {
+                watcher.handleEvent(now: start.addingTimeInterval(Double(index) * 0.02))
             }
-        }
-        timer.resume()
+            XCTAssertEqual(fireCount, 0)
 
-        waitForExpectations(timeout: 2.0)
-        XCTAssertGreaterThanOrEqual(fireCount, 2, "Continuous stream should force-fire due to maxDeferralInterval")
+            watcher.handleEvent(now: start.addingTimeInterval(0.16))
+            XCTAssertEqual(fireCount, 1, "The first burst must fire before events stop")
+
+            for index in 9..<17 {
+                watcher.handleEvent(now: start.addingTimeInterval(Double(index) * 0.02))
+            }
+            XCTAssertEqual(fireCount, 1)
+
+            watcher.handleEvent(now: start.addingTimeInterval(0.34))
+            XCTAssertEqual(fireCount, 2, "The deferral limit must apply again after firing")
+        }
     }
 
     func testFileWatcherStopCancelsPendingDebounce() {
@@ -82,13 +85,13 @@ final class FileWatcherTests: XCTestCase {
         ) {
             expectation.fulfill()
         }
+        defer { watcher.stop() }
 
-        queue.async {
+        queue.sync {
             watcher.handleEvent()
         }
 
-        // Stop the watcher almost immediately while debounce is scheduled
-        usleep(20_000) // 20ms
+        // Stop only after the event has scheduled its pending debounce.
         watcher.stop()
 
         waitForExpectations(timeout: 0.4)
