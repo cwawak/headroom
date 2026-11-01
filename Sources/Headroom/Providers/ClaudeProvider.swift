@@ -40,8 +40,12 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
     private var utilizations: [(date: Date, window: QuotaWindow, fraction: Double)] = []
 
     /// Ingestion status / diagnostics for incomplete reading.
-    private var isIngestionIncomplete: Bool = false
-    private var incompleteReason: String? = nil
+    /// Persistent record-loss reasons (e.g. discarded oversized or future-dated records)
+    /// remain until process restart or retention pruning, preventing false spare quota.
+    private var persistentRecordLossReason: String? = nil
+    /// Retryable scan failure reasons (e.g. transient insecure directory or file permissions)
+    /// are evaluated per-scan to allow automatic recovery once repaired.
+    private var scanFailureReason: String? = nil
 
     /// Keep a little more than a week so a calendar window near its boundary is
     /// still fully covered.
@@ -109,8 +113,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         let now = customNow ?? Date()
         let cutoff = now.addingTimeInterval(-retention)
 
-        isIngestionIncomplete = false
-        incompleteReason = nil
+        scanFailureReason = nil
 
         ingestNewBytes(now: now, cutoff: cutoff)
 
@@ -121,7 +124,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         // Filter dictionary without mutating during iteration
         seenRequestIds = seenRequestIds.filter { $0.value >= cutoff }
 
-        if isIngestionIncomplete, let reason = incompleteReason {
+        if let reason = persistentRecordLossReason ?? scanFailureReason {
             return Snapshot(provider: id, readings: allUnavailable("Claude usage incomplete: \(reason)"),
                             capturedAt: now, sourceDate: entries.last?.date, planLabel: nil, rawWeighted: nil)
         }
@@ -267,8 +270,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
             return false
         }
         if (st.st_mode & S_IFMT) == S_IFLNK {
-            isIngestionIncomplete = true
-            incompleteReason = "source root is a symbolic link: \(path)"
+            scanFailureReason = "source root is a symbolic link: \(path)"
             return false
         }
         if (st.st_mode & S_IFMT) != S_IFDIR {
@@ -311,14 +313,12 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
 
                 let candidatePath = url.path
                 guard Self.isSecureChild(baseRoot: root.path, candidatePath: candidatePath) else {
-                    isIngestionIncomplete = true
-                    incompleteReason = "path traversal outside root: \(candidatePath)"
+                    scanFailureReason = "path traversal outside root: \(candidatePath)"
                     continue
                 }
 
                 guard PosixSecurity.verifyDirectoryChain(basePath: root.path, targetPath: candidatePath) else {
-                    isIngestionIncomplete = true
-                    incompleteReason = "insecure directory chain: \(candidatePath)"
+                    scanFailureReason = "insecure directory chain: \(candidatePath)"
                     continue
                 }
 
@@ -329,44 +329,38 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
 
     private func ingestFile(at path: String, now: Date, cutoff: Date) {
         guard PosixSecurity.verifyACLSafety(path: path) else {
-            isIngestionIncomplete = true
-            incompleteReason = "insecure ACL on log file: \(path)"
+            scanFailureReason = "insecure ACL on log file: \(path)"
             return
         }
 
         let flags = O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
         let fd = open(path, flags)
         guard fd >= 0 else {
-            isIngestionIncomplete = true
-            incompleteReason = "failed to open log file securely: \(path)"
+            scanFailureReason = "failed to open log file securely: \(path)"
             return
         }
         defer { close(fd) }
 
         var st = stat()
         guard fstat(fd, &st) == 0 else {
-            isIngestionIncomplete = true
-            incompleteReason = "failed to stat descriptor for log file: \(path)"
+            scanFailureReason = "failed to stat descriptor for log file: \(path)"
             return
         }
 
         guard (st.st_mode & S_IFMT) == S_IFREG else {
-            isIngestionIncomplete = true
-            incompleteReason = "not a regular file: \(path)"
+            scanFailureReason = "not a regular file: \(path)"
             return
         }
 
         // Must be owned by current effective user
         guard st.st_uid == geteuid() else {
-            isIngestionIncomplete = true
-            incompleteReason = "untrusted file owner for log file: \(path)"
+            scanFailureReason = "untrusted file owner for log file: \(path)"
             return
         }
 
         // Must not have group or other write permission
         guard (st.st_mode & 0o022) == 0 else {
-            isIngestionIncomplete = true
-            incompleteReason = "insecure file permissions: \(path)"
+            scanFailureReason = "insecure file permissions: \(path)"
             return
         }
 
@@ -412,8 +406,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
 
             if bytesRead <= 0 {
                 if bytesRead < 0 && errno == EINTR { continue }
-                isIngestionIncomplete = true
-                incompleteReason = "read error or truncation on file: \(path)"
+                scanFailureReason = "read error or truncation on file: \(path)"
                 break
             }
 
@@ -467,8 +460,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
                 if let newlineRel = buffer[searchIndex...].firstIndex(of: 0x0A) {
                     let line = buffer[searchIndex..<newlineRel]
                     if line.count > Self.maxRecordSize {
-                        isIngestionIncomplete = true
-                        incompleteReason = "oversized log record (>8 MiB) in \(path)"
+                        persistentRecordLossReason = "oversized log record (>8 MiB) in \(path)"
                     } else {
                         parseLine(line, now: now, cutoff: cutoff)
                     }
@@ -480,8 +472,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
                 } else {
                     let remaining = buffer[searchIndex...]
                     if remaining.count > Self.maxRecordSize {
-                        isIngestionIncomplete = true
-                        incompleteReason = "oversized log record (>8 MiB) in \(path)"
+                        persistentRecordLossReason = "oversized log record (>8 MiB) in \(path)"
                         state.discardingOversizedLine = true
                         searchIndex = buffer.count
                         state.offset = currentOffset
@@ -511,8 +502,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
         }
 
         if date > now.addingTimeInterval(300) {
-            isIngestionIncomplete = true
-            incompleteReason = "implausibly future-dated log record: \(date)"
+            persistentRecordLossReason = "implausibly future-dated log record: \(date)"
             return
         }
 

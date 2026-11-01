@@ -356,6 +356,15 @@ final class HeadroomHardeningTests: XCTestCase {
         } else {
             XCTFail("Expected unavailable reading due to oversized log record")
         }
+
+        // Take a second snapshot on the same provider instance with no file changes;
+        // persistent record-loss status must be preserved rather than reporting 0% used.
+        let snap2 = try! provider.snapshot()
+        if case .unavailable(let reason) = snap2.readings[.short] {
+            XCTAssertTrue(reason.contains("oversized log record (>8 MiB)"))
+        } else {
+            XCTFail("Expected second snapshot to remain unavailable due to persistent record loss, got \(String(describing: snap2.readings[.short]))")
+        }
     }
 
     func testClaudeDirectoryChainValidationRejectsInsecureSubdirectory() {
