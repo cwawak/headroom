@@ -256,6 +256,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
     private static let usageMarker = Data("\"usage\"".utf8)
     private static let quotaMarker = Data("quotaLimits".utf8)
     private static let rateInfoMarker = Data("rate_limit_info".utf8)
+    private static let jsonDecoder = JSONDecoder()
 
     private func validateSourceRoot(_ root: URL) -> Bool {
         let path = root.path
@@ -445,8 +446,7 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
                     || data.range(of: Self.rateInfoMarker) != nil
         guard hasUsage || hasQuota else { return }
 
-        let decoder = JSONDecoder()
-        guard let row = try? decoder.decode(ClaudeRow.self, from: data),
+        guard let row = try? Self.jsonDecoder.decode(ClaudeRow.self, from: data),
               let date = row.date else { return }
 
         if date < cutoff {
