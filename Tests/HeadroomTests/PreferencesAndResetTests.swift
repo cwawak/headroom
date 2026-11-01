@@ -99,4 +99,85 @@ final class PreferencesAndResetTests: XCTestCase {
             XCTFail("Expected abnormalFreeReset")
         }
     }
+
+    func testClaudeCalibrationDoesNotTriggerFreeReset() {
+        var notifiedResets: [ResetDetector.ResetType] = []
+        let detector = ResetDetector(center: nil, onNotification: { reset in
+            notifiedResets.append(reset)
+        })
+        let now = Date(timeIntervalSince1970: 1700000000)
+        let futureReset = now.addingTimeInterval(7200)
+
+        // Claude reading is estimated, not authoritative
+        let snap1 = [
+            ProviderID.claude: Snapshot(
+                provider: .claude,
+                readings: [.short: .estimated(percent: 80.0, confidence: 0.8, resetsAt: futureReset)],
+                capturedAt: now,
+                sourceDate: now,
+                planLabel: "calibrated",
+                rawWeighted: nil
+            )
+        ]
+        _ = detector.inspect(snapshots: snap1, now: now)
+
+        // Recalibration drops from 80% to 40% before reset time
+        let snap2 = [
+            ProviderID.claude: Snapshot(
+                provider: .claude,
+                readings: [.short: .estimated(percent: 40.0, confidence: 0.9, resetsAt: futureReset)],
+                capturedAt: now.addingTimeInterval(300),
+                sourceDate: now.addingTimeInterval(300),
+                planLabel: "calibrated",
+                rawWeighted: nil
+            )
+        ]
+
+        let resets = detector.inspect(snapshots: snap2, now: now.addingTimeInterval(300))
+        XCTAssertTrue(resets.isEmpty, "Estimated readings must not trigger free quota reset alerts")
+        XCTAssertTrue(notifiedResets.isEmpty)
+    }
+
+    func testScheduledResetDetectedEvenIfUsageIncreases() {
+        var notifiedResets: [ResetDetector.ResetType] = []
+        let detector = ResetDetector(center: nil, onNotification: { reset in
+            notifiedResets.append(reset)
+        })
+        let now = Date(timeIntervalSince1970: 1700000000)
+        let firstReset = now.addingTimeInterval(3600)
+        let secondReset = firstReset.addingTimeInterval(18000)
+
+        let snap1 = [
+            ProviderID.codex: Snapshot(
+                provider: .codex,
+                readings: [.short: .authoritative(percent: 10.0, resetsAt: firstReset)],
+                capturedAt: now,
+                sourceDate: now,
+                planLabel: "pro",
+                rawWeighted: nil
+            )
+        ]
+        _ = detector.inspect(snapshots: snap1, now: now)
+
+        // After window rollover, reset timestamp moves forward to secondReset and usage started at 15% (higher than 10%)
+        let snap2 = [
+            ProviderID.codex: Snapshot(
+                provider: .codex,
+                readings: [.short: .authoritative(percent: 15.0, resetsAt: secondReset)],
+                capturedAt: now.addingTimeInterval(4000),
+                sourceDate: now.addingTimeInterval(4000),
+                planLabel: "pro",
+                rawWeighted: nil
+            )
+        ]
+
+        let resets = detector.inspect(snapshots: snap2, now: now.addingTimeInterval(4000))
+        XCTAssertEqual(resets.count, 1)
+        if case .normal(let provider, let window) = resets[0] {
+            XCTAssertEqual(provider, .codex)
+            XCTAssertEqual(window, .short)
+        } else {
+            XCTFail("Expected normal reset on timestamp advancement")
+        }
+    }
 }

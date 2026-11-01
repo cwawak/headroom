@@ -135,9 +135,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .filter { !preferences.isProviderHidden($0) }
             .compactMap { id -> (ProviderID, Double, Date?)? in
                 guard let snap = snaps[id] else { return nil }
-                // User requirement: Focus on weekly (or fallback to worst available)
-                let targetWindow: QuotaWindow = .long
-                let reading = snap.readings[targetWindow] ?? worstWindow(of: snap).1
+                // User requirement: Focus on weekly, falling back to worst available if weekly has no valid reading
+                let weeklyReading = snap.readings[.long]
+                let reading = (weeklyReading?.percentRemaining != nil) ? weeklyReading! : worstWindow(of: snap).1
                 guard let left = reading.percentRemaining else { return nil }
                 return (id, left, snap.sourceDate)
             }

@@ -44,20 +44,28 @@ final class ResetDetector: @unchecked Sendable {
                 let currentResetsAt = reading.resetsAt
 
                 if let prev = prevMap[window] {
-                    // Check if usage dropped
-                    if currentUsed < prev.usedPercent {
-                        let drop = prev.usedPercent - currentUsed
-                        let normalResetOccurred: Bool
-                        if let resetDate = prev.resetsAt {
-                            normalResetOccurred = (now >= resetDate)
+                    // 1. Detect scheduled window rollover independently of percentage comparison:
+                    // If resetsAt advanced to a later time, or if the scheduled reset timestamp has passed
+                    let resetRolledOver: Bool
+                    if let prevReset = prev.resetsAt {
+                        if let curReset = currentResetsAt, curReset > prevReset {
+                            resetRolledOver = true
+                        } else if now >= prevReset && currentUsed < prev.usedPercent {
+                            resetRolledOver = true
                         } else {
-                            normalResetOccurred = false
+                            resetRolledOver = false
                         }
+                    } else {
+                        resetRolledOver = false
+                    }
 
-                        if normalResetOccurred {
-                            detected.append(.normal(provider: provider, window: window))
-                        } else if drop >= 5.0 {
-                            // Usage dropped outside scheduled reset window (e.g., ChatGPT free/early reset)
+                    if resetRolledOver {
+                        detected.append(.normal(provider: provider, window: window))
+                    } else if reading.isExact && currentUsed < prev.usedPercent {
+                        // 2. Restrict free quota reset detection to authoritative readings (Codex).
+                        // Calibrating Claude or adjusting estimations must not trigger a false "Free Quota Reset".
+                        let drop = prev.usedPercent - currentUsed
+                        if drop >= 5.0 {
                             detected.append(.abnormalFreeReset(provider: provider, window: window, dropPercent: drop))
                         }
                     }
