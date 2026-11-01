@@ -30,7 +30,7 @@ final class UsageProviderTests: XCTestCase {
 
     /// Dummy struct conforming to `UsageProvider` that explicitly overrides `canReportUsage`.
     private struct CustomUnreportableUsageProvider: UsageProvider {
-        let id: ProviderID = .gemini
+        let id: ProviderID = .antigravity
 
         var canReportUsage: Bool {
             false
@@ -73,7 +73,7 @@ final class UsageProviderTests: XCTestCase {
         let claude = ClaudeProvider()
         XCTAssertTrue(claude.canReportUsage, "ClaudeProvider should return true for default canReportUsage")
 
-        let gemini = GeminiProvider()
-        XCTAssertFalse(gemini.canReportUsage, "GeminiProvider should return false for custom canReportUsage")
+        let antigravity = AntigravityProvider()
+        XCTAssertFalse(antigravity.canReportUsage, "AntigravityProvider should return false for custom canReportUsage")
     }
 }

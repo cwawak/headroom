@@ -65,6 +65,26 @@ struct Snapshot: Sendable {
     /// Raw weighted consumption per window, for providers that compute one.
     /// Lets the user calibrate against a number they can actually see.
     let rawWeighted: [QuotaWindow: Double]?
+    /// Banked reset credits if available (e.g., from Codex rate limits).
+    let bankedResets: Int?
+
+    init(
+        provider: ProviderID,
+        readings: [QuotaWindow: Reading],
+        capturedAt: Date,
+        sourceDate: Date?,
+        planLabel: String?,
+        rawWeighted: [QuotaWindow: Double]?,
+        bankedResets: Int? = nil
+    ) {
+        self.provider = provider
+        self.readings = readings
+        self.capturedAt = capturedAt
+        self.sourceDate = sourceDate
+        self.planLabel = planLabel
+        self.rawWeighted = rawWeighted
+        self.bankedResets = bankedResets
+    }
 
     /// A reading whose source event is hours old is not a current reading.
     var staleness: TimeInterval? {
@@ -76,13 +96,13 @@ struct Snapshot: Sendable {
 enum ProviderID: String, Sendable, CaseIterable {
     case codex
     case claude
-    case gemini
+    case antigravity
 
     var displayName: String {
         switch self {
-        case .codex:  return "Codex"
-        case .claude: return "Claude"
-        case .gemini: return "Gemini"
+        case .codex:       return "Codex"
+        case .claude:      return "Claude"
+        case .antigravity: return "Antigravity"
         }
     }
 }

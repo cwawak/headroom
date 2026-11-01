@@ -54,12 +54,15 @@ struct CodexProvider: UsageProvider {
 
         let readings = Self.readings(from: hit.limits)
 
+        let banked = hit.limits.bankedResets ?? hit.limits.rateLimitResetCredits?.availableCount
+
         return Snapshot(provider: id,
                         readings: readings,
                         capturedAt: Date(),
                         sourceDate: hit.date,
                         planLabel: hit.limits.planType,
-                        rawWeighted: nil)
+                        rawWeighted: nil,
+                        bankedResets: banked)
     }
 
     // MARK: - Mapping
@@ -222,6 +225,28 @@ struct RateLimits: Decodable, Sendable {
     let planType: String?
     let primary: RateWindow?
     let secondary: RateWindow?
+    let bankedResets: Int?
+    let rateLimitResetCredits: RateLimitResetCredits?
+
+    init(
+        limitId: String? = nil,
+        planType: String? = nil,
+        primary: RateWindow? = nil,
+        secondary: RateWindow? = nil,
+        bankedResets: Int? = nil,
+        rateLimitResetCredits: RateLimitResetCredits? = nil
+    ) {
+        self.limitId = limitId
+        self.planType = planType
+        self.primary = primary
+        self.secondary = secondary
+        self.bankedResets = bankedResets
+        self.rateLimitResetCredits = rateLimitResetCredits
+    }
+}
+
+struct RateLimitResetCredits: Decodable, Sendable {
+    let availableCount: Int?
 }
 
 struct RateWindow: Decodable, Sendable {

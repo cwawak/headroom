@@ -22,7 +22,7 @@ and launch. It's a menu bar app — no Dock icon. Signed and notarized releases 
 | --- | --- | --- |
 | **Codex** | `~/.codex/sessions/**/rollout-*.jsonl` | **exact** — the server computes `used_percent` and Codex writes it down |
 | **Claude** | `~/.claude/projects/**/*.jsonl` | **estimated** — a weighted token ledger divided by a capacity you calibrate |
-| **Gemini** | — | **none** — see below |
+| **Antigravity** | — | **none** — see below |
 
 Everything the UI shows reads as **remaining**. "73% left" means 73% left.
 
@@ -50,14 +50,12 @@ been observed writing an exact `utilization` fraction, which Headroom folds into
 the calibration when it appears. The catch: `utilization` is emitted only once a
 window passes ~90%, so it sharpens the estimate rather than replacing it.
 
-### Why Gemini shows nothing
+### Why Antigravity shows nothing
 
-Both Google apps *display* quota and neither *stores* it — verified rather than
-assumed. Antigravity's `state.vscdb` has one quota-shaped key, `modelCredits`,
-which decodes to credit sentinels rather than percentages. The Gemini desktop app
-keeps no LocalStorage or IndexedDB, and its URL cache holds only fonts. Both panes
-carry a refresh button and an "Updated just now" line: the numbers are fetched
-live per view.
+Antigravity *displays* quota and neither *stores* it locally on disk — verified
+rather than assumed. Antigravity's `state.vscdb` has one quota-shaped key, `modelCredits`,
+which decodes to credit sentinels rather than percentages. The panes carry a
+refresh button and an "Updated just now" line: numbers are fetched live per view.
 
 Reading them would mean calling Google's endpoint with your OAuth token. This
 project doesn't do that for Claude and doesn't do it here either.
@@ -110,7 +108,7 @@ when a vendor changes a log format, that's the fastest way to find out what brok
 | `Providers/CodexProvider.swift` | reverse-tail parser (authoritative) |
 | `Providers/ClaudeProvider.swift` | incremental token ledger (estimated) |
 | `Providers/Calibration.swift` | learns the limit Claude never writes down |
-| `Providers/GeminiProvider.swift` | honest detection, no invented numbers |
+| `Providers/AntigravityProvider.swift` | honest detection, no invented numbers |
 | `Watch/FileWatcher.swift` | one shared FSEvents stream |
 | `Render/MenuRowView.swift` | the animated drain capsule |
 | `App/AppDelegate.swift` | status item, menu, calibration sheet |
@@ -195,7 +193,7 @@ xcrun notarytool store-credentials "Headroom" --apple-id "you@example.com" --tea
 ### Why not the Mac App Store
 
 The App Store requires App Sandbox, and a sandboxed process cannot read
-`~/.claude`, `~/.codex` or `~/.gemini` — which is the entire app. The only
+`~/.claude`, `~/.codex` or `~/.gemini/antigravity` — which is the entire app. The only
 sandbox-legal route is `NSOpenPanel` plus security-scoped bookmarks, meaning the
 user hand-grants three hidden dotfolders on first run and re-grants them when the
 bookmarks go stale. Developer ID is the correct channel for a tool like this, not
