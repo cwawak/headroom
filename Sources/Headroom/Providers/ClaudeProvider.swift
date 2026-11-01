@@ -313,6 +313,12 @@ final class ClaudeProvider: UsageProvider, @unchecked Sendable {
                     continue
                 }
 
+                guard PosixSecurity.verifyDirectoryChain(basePath: root.path, targetPath: candidatePath) else {
+                    isIngestionIncomplete = true
+                    incompleteReason = "insecure directory chain: \(candidatePath)"
+                    continue
+                }
+
                 ingestFile(at: candidatePath, now: now, cutoff: cutoff)
             }
         }

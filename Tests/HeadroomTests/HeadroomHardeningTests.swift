@@ -182,6 +182,32 @@ final class HeadroomHardeningTests: XCTestCase {
         XCTAssertNotNil(snap)
     }
 
+    func testDirectoryChainValidationRejectsInsecureSubdirectory() {
+        let projectsDir = tempDir.appendingPathComponent(".claude/projects")
+        let unsafeSubdir = projectsDir.appendingPathComponent("project_insecure")
+        try? FileManager.default.createDirectory(at: unsafeSubdir, withIntermediateDirectories: true)
+
+        let logFile = unsafeSubdir.appendingPathComponent("session.jsonl")
+        let record = "{\"timestamp\":\"2025-01-01T00:00:00Z\",\"requestId\":\"r1\",\"message\":{\"model\":\"claude-3-sonnet\",\"usage\":{\"input_tokens\":100,\"output_tokens\":50}}}\n"
+        try! record.write(to: logFile, atomically: true, encoding: .utf8)
+
+        // Make the subdirectory world-writable (violating PosixSecurity directory chain checks)
+        try! FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: unsafeSubdir.path)
+
+        let provider = ClaudeProvider()
+        provider.customProjectsRoot = projectsDir
+        provider.customAgentModeRoot = tempDir.appendingPathComponent("MissingAgentMode")
+
+        let snap = try! provider.snapshot()
+
+        // Ingestion should be marked incomplete due to insecure directory chain
+        if case .unavailable(let reason) = snap.readings[.short] {
+            XCTAssertTrue(reason.contains("insecure directory chain"))
+        } else {
+            XCTFail("Expected snapshot to be unavailable due to insecure directory chain")
+        }
+    }
+
     // MARK: - CodexProvider Traversal & Parsing Tests
 
     func testCodexProviderNewestRolloutsDirectoryTraversal() throws {
