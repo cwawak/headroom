@@ -25,4 +25,8 @@ cp "$BIN_DIR/Headroom" "$APP/Contents/MacOS/Headroom"
 cp Resources/Info.plist      "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns    "$APP/Contents/Resources/AppIcon.icns"
 
-echo "built $APP (unsigned)"
+echo "==> signing (ad-hoc)"
+/usr/bin/codesign --force --deep -s - "$APP"
+/usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
+
+echo "built $APP (ad-hoc signed)"

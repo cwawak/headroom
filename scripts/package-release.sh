@@ -7,6 +7,7 @@ cd "$(dirname "$0")/.."
 
 HDIUTIL=/usr/bin/hdiutil
 ICONUTIL=/usr/bin/iconutil
+CODESIGN=/usr/bin/codesign
 
 APP="build/Headroom.app"
 APP_ZIP="build/Headroom.app.zip"
@@ -39,6 +40,10 @@ cp "$BIN_DIR/Headroom" "$APP/Contents/MacOS/Headroom"
 cp Resources/Info.plist      "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns    "$APP/Contents/Resources/AppIcon.icns"
 
+echo "==> signing (ad-hoc)"
+$CODESIGN --force --deep -s - "$APP"
+$CODESIGN --verify --deep --strict --verbose=2 "$APP"
+
 echo "==> zip"
 /usr/bin/ditto -c -k --keepParent "$APP" "$APP_ZIP"
 
@@ -49,6 +54,8 @@ cp -R "$APP" build/dmgroot/
 ln -s /Applications build/dmgroot/Applications
 $HDIUTIL create -volname "Headroom" -srcfolder build/dmgroot \
                -ov -format UDZO "$DMG" >/dev/null
+$CODESIGN --force -s - "$DMG"
+$CODESIGN --verify --verbose=2 "$DMG"
 
 echo
 echo "done: $DMG and $APP_ZIP"
