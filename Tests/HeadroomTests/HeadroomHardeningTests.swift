@@ -182,6 +182,89 @@ final class HeadroomHardeningTests: XCTestCase {
         XCTAssertNotNil(snap)
     }
 
+    // MARK: - CodexProvider Traversal & Parsing Tests
+
+    func testCodexProviderNewestRolloutsDirectoryTraversal() throws {
+        let sessionsDir = tempDir.appendingPathComponent(".codex/sessions")
+        let dayDir = sessionsDir.appendingPathComponent("2025/01/15")
+        try FileManager.default.createDirectory(at: dayDir, withIntermediateDirectories: true)
+
+        let rolloutFile = dayDir.appendingPathComponent("rollout-1.jsonl")
+        let resetsAt = Date().addingTimeInterval(3600).timeIntervalSince1970
+        let jsonRecord = "{\"timestamp\":\"2025-01-15T12:00:00Z\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"limit_id\":\"codex\",\"plan_type\":\"pro\",\"primary\":{\"used_percent\":25.0,\"window_minutes\":300,\"resets_at\":\(resetsAt)},\"secondary\":{\"used_percent\":10.0,\"window_minutes\":10080,\"resets_at\":\(resetsAt)}}}}\n"
+        try jsonRecord.write(to: rolloutFile, atomically: true, encoding: .utf8)
+
+        var provider = CodexProvider()
+        provider.customSessionsRoot = sessionsDir
+
+        let snap = try provider.snapshot()
+        XCTAssertEqual(snap.provider, .codex)
+        XCTAssertEqual(snap.planLabel, "pro")
+
+        if case .authoritative(let percent, _) = snap.readings[.short] {
+            XCTAssertEqual(percent, 25.0)
+        } else {
+            XCTFail("Expected authoritative short quota reading, got \(String(describing: snap.readings[.short]))")
+        }
+
+        if case .authoritative(let percent, _) = snap.readings[.long] {
+            XCTAssertEqual(percent, 10.0)
+        } else {
+            XCTFail("Expected authoritative long quota reading, got \(String(describing: snap.readings[.long]))")
+        }
+    }
+
+    // MARK: - ClaudeProvider.isSecureChild Unit Tests
+
+    func testIsSecureChildValidSubpaths() {
+        XCTAssertTrue(ClaudeProvider.isSecureChild(baseRoot: "/tmp/claude", candidatePath: "/tmp/claude"))
+        XCTAssertTrue(ClaudeProvider.isSecureChild(baseRoot: "/tmp/claude", candidatePath: "/tmp/claude/session.jsonl"))
+        XCTAssertTrue(ClaudeProvider.isSecureChild(baseRoot: "/tmp/claude", candidatePath: "/tmp/claude/sub/dir/session.jsonl"))
+        XCTAssertTrue(ClaudeProvider.isSecureChild(baseRoot: "/tmp/claude", candidatePath: "/tmp/claude/sub/../session.jsonl"))
+    }
+
+    func testIsSecureChildPathTraversalAndEscape() {
+        XCTAssertFalse(ClaudeProvider.isSecureChild(baseRoot: "/tmp/claude", candidatePath: "/tmp/claude/../etc/passwd"))
+        XCTAssertFalse(ClaudeProvider.isSecureChild(baseRoot: "/tmp/claude/projects", candidatePath: "/tmp/claude/projects/../../etc/passwd"))
+        XCTAssertFalse(ClaudeProvider.isSecureChild(baseRoot: "/tmp/claude", candidatePath: "/etc/passwd"))
+    }
+
+    func testIsSecureChildPrefixCollision() {
+        XCTAssertFalse(ClaudeProvider.isSecureChild(baseRoot: "/tmp/claude", candidatePath: "/tmp/claude-other/session.jsonl"))
+        XCTAssertFalse(ClaudeProvider.isSecureChild(baseRoot: "/var/log/claude", candidatePath: "/var/log/claude_backup/data.jsonl"))
+    }
+
+    func testIsSecureChildSymlinks() {
+        let baseDir = tempDir.appendingPathComponent("BaseDir")
+        let outsideDir = tempDir.appendingPathComponent("OutsideDir")
+        try? FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: outsideDir, withIntermediateDirectories: true)
+
+        // 1. Target file outside base root
+        let outsideFile = outsideDir.appendingPathComponent("secret.txt")
+        try! "secret".write(to: outsideFile, atomically: true, encoding: .utf8)
+
+        // Symlink inside base root pointing to file outside
+        let escapingSymlink = baseDir.appendingPathComponent("escaping_link.txt")
+        try! FileManager.default.createSymbolicLink(at: escapingSymlink, withDestinationURL: outsideFile)
+
+        XCTAssertFalse(ClaudeProvider.isSecureChild(baseRoot: baseDir.path, candidatePath: escapingSymlink.path))
+
+        // 2. Target file inside base root
+        let insideSubdir = baseDir.appendingPathComponent("SubDir")
+        try? FileManager.default.createDirectory(at: insideSubdir, withIntermediateDirectories: true)
+        let insideFile = insideSubdir.appendingPathComponent("safe.txt")
+        try! "safe".write(to: insideFile, atomically: true, encoding: .utf8)
+
+        // Symlink inside base root pointing to file inside base root
+        let internalSymlink = baseDir.appendingPathComponent("internal_link.txt")
+        try! FileManager.default.createSymbolicLink(at: internalSymlink, withDestinationURL: insideFile)
+
+        XCTAssertTrue(ClaudeProvider.isSecureChild(baseRoot: baseDir.path, candidatePath: internalSymlink.path))
+    }
+
+    // MARK: - ClaudeProvider Ingestion Hardening Tests
+
     func testOversizedLogRecordHandling() {
         let projectsDir = tempDir.appendingPathComponent(".claude/projects")
         try? FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
