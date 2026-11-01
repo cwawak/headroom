@@ -160,18 +160,19 @@ final class PreferencesAndResetTests: XCTestCase {
         _ = detector.inspect(snapshots: snap1, now: now)
 
         // After window rollover, reset timestamp moves forward to secondReset and usage started at 15% (higher than 10%)
+        let inspectionTime = firstReset.addingTimeInterval(10) // After firstReset passed
         let snap2 = [
             ProviderID.codex: Snapshot(
                 provider: .codex,
                 readings: [.short: .authoritative(percent: 15.0, resetsAt: secondReset)],
-                capturedAt: now.addingTimeInterval(4000),
-                sourceDate: now.addingTimeInterval(4000),
+                capturedAt: inspectionTime,
+                sourceDate: inspectionTime,
                 planLabel: "pro",
                 rawWeighted: nil
             )
         ]
 
-        let resets = detector.inspect(snapshots: snap2, now: now.addingTimeInterval(4000))
+        let resets = detector.inspect(snapshots: snap2, now: inspectionTime)
         XCTAssertEqual(resets.count, 1)
         if case .normal(let provider, let window) = resets[0] {
             XCTAssertEqual(provider, .codex)
@@ -179,5 +180,44 @@ final class PreferencesAndResetTests: XCTestCase {
         } else {
             XCTFail("Expected normal reset on timestamp advancement")
         }
+    }
+
+    func testDeadlineChangeBeforeExpiryDoesNotTriggerResetNotification() {
+        var notifiedResets: [ResetDetector.ResetType] = []
+        let detector = ResetDetector(center: nil, onNotification: { reset in
+            notifiedResets.append(reset)
+        })
+        let now = Date(timeIntervalSince1970: 1700000000)
+        let originalDeadline = now.addingTimeInterval(7200) // 2 hours in the future
+        let newLaterDeadline = now.addingTimeInterval(14400) // 4 hours in the future
+
+        let snap1 = [
+            ProviderID.codex: Snapshot(
+                provider: .codex,
+                readings: [.short: .authoritative(percent: 25.0, resetsAt: originalDeadline)],
+                capturedAt: now,
+                sourceDate: now,
+                planLabel: "pro",
+                rawWeighted: nil
+            )
+        ]
+        _ = detector.inspect(snapshots: snap1, now: now)
+
+        // Deadline moved to later time while originalDeadline is still in the future, usage steady or slightly higher
+        let intermediateNow = now.addingTimeInterval(600) // 10 minutes later (still way before 2 hours)
+        let snap2 = [
+            ProviderID.codex: Snapshot(
+                provider: .codex,
+                readings: [.short: .authoritative(percent: 28.0, resetsAt: newLaterDeadline)],
+                capturedAt: intermediateNow,
+                sourceDate: intermediateNow,
+                planLabel: "pro",
+                rawWeighted: nil
+            )
+        ]
+
+        let resets = detector.inspect(snapshots: snap2, now: intermediateNow)
+        XCTAssertTrue(resets.isEmpty, "A later reset deadline before the previous deadline expired must not trigger a reset notification")
+        XCTAssertTrue(notifiedResets.isEmpty)
     }
 }

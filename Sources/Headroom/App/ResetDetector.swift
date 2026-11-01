@@ -44,26 +44,33 @@ final class ResetDetector: @unchecked Sendable {
                 let currentResetsAt = reading.resetsAt
 
                 if let prev = prevMap[window] {
-                    // 1. Detect scheduled window rollover independently of percentage comparison:
-                    // If resetsAt advanced to a later time, or if the scheduled reset timestamp has passed
-                    let resetRolledOver: Bool
+                    let prevDeadlinePassed: Bool
                     if let prevReset = prev.resetsAt {
-                        if let curReset = currentResetsAt, curReset > prevReset {
-                            resetRolledOver = true
-                        } else if now >= prevReset && currentUsed < prev.usedPercent {
-                            resetRolledOver = true
-                        } else {
-                            resetRolledOver = false
-                        }
+                        prevDeadlinePassed = (now >= prevReset)
                     } else {
-                        resetRolledOver = false
+                        prevDeadlinePassed = false
                     }
 
-                    if resetRolledOver {
+                    // 1. Scheduled rollover: requires the previous deadline to have passed.
+                    // If the deadline passed and either resetsAt advanced or usage dropped, it is a normal reset.
+                    let scheduledRollover: Bool
+                    if prevDeadlinePassed {
+                        if let prevReset = prev.resetsAt, let curReset = currentResetsAt, curReset > prevReset {
+                            scheduledRollover = true
+                        } else if currentUsed < prev.usedPercent {
+                            scheduledRollover = true
+                        } else {
+                            scheduledRollover = false
+                        }
+                    } else {
+                        scheduledRollover = false
+                    }
+
+                    if scheduledRollover {
                         detected.append(.normal(provider: provider, window: window))
-                    } else if reading.isExact && currentUsed < prev.usedPercent {
-                        // 2. Restrict free quota reset detection to authoritative readings (Codex).
-                        // Calibrating Claude or adjusting estimations must not trigger a false "Free Quota Reset".
+                    } else if reading.isExact && !prevDeadlinePassed && currentUsed < prev.usedPercent {
+                        // 2. Early / free reset: usage dropped before the previous deadline expired.
+                        // Restricted to authoritative readings (Codex).
                         let drop = prev.usedPercent - currentUsed
                         if drop >= 5.0 {
                             detected.append(.abnormalFreeReset(provider: provider, window: window, dropPercent: drop))
