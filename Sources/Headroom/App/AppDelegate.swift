@@ -3,7 +3,9 @@ import AppKit
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
-    private let providers: [any UsageProvider] = [CodexProvider(), ClaudeProvider(), GeminiProvider()]
+    private let providers: [any UsageProvider] = [CodexProvider(), ClaudeProvider(), AntigravityProvider()]
+    private let preferences = PreferencesStore()
+    private let resetDetector = ResetDetector()
 
     private var watcher: FileWatcher?
     private var statusItem: NSStatusItem!
@@ -17,9 +19,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var metaItems: [ProviderID: NSMenuItem] = [:]
 
     private var installed: [ProviderID] = []
-    private var displayOrder: [ProviderID] { [.codex, .claude, .gemini] }
+    private var displayOrder: [ProviderID] { [.codex, .claude, .antigravity] }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        resetDetector.requestAuthorization()
+
         installed = displayOrder.filter { id in
             guard let p = providers.first(where: { $0.id == id }) else { return false }
             return p.isInstalled() && p.canReportUsage
@@ -86,15 +90,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Refresh
 
     /// Throttled, not just debounced.
-    ///
-    /// While an agent is actively working, its log is written continuously, so a
-    /// plain debounce still fires several times a second — and each Claude scan
-    /// costs ~75 ms. Measured at ~17% of a core during a live session, which is
-    /// exactly the battery drain this app exists to warn about. A hard floor
-    /// between scans caps it at roughly 1%.
-    ///
-    /// The gauge is allowed to lag a few seconds. It is not allowed to be the
-    /// reason your fans spin up.
     private static let minimumScanInterval: TimeInterval = 6
 
     private func scheduleRefresh() {
@@ -123,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func apply(_ snaps: [ProviderID: Snapshot]) {
         snapshots = snaps
+        _ = resetDetector.inspect(snapshots: snaps)
 
         for id in installed {
             guard let snap = snaps[id] else { continue }
@@ -134,15 +130,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             metaItems[id]?.attributedTitle = secondary(metaLine(for: snap), indent: 21)
         }
 
-        // Which agent the bar speaks for. Preference goes to the one you're
-        // actually using — the most recently written log — because that's the
-        // number you care about mid-task. If nothing has been touched lately,
-        // fall back to whichever agent is closest to running out.
-        let candidates = installed.compactMap { id -> (ProviderID, Double, Date?)? in
-            guard let snap = snaps[id],
-                  let left = worstWindow(of: snap).1.percentRemaining else { return nil }
-            return (id, left, snap.sourceDate)
-        }
+        // Candidates for status presentation: respect hidden providers and focus on weekly
+        let candidates = installed
+            .filter { !preferences.isProviderHidden($0) }
+            .compactMap { id -> (ProviderID, Double, Date?)? in
+                guard let snap = snaps[id] else { return nil }
+                // User requirement: Focus on weekly (or fallback to worst available)
+                let targetWindow: QuotaWindow = .long
+                let reading = snap.readings[targetWindow] ?? worstWindow(of: snap).1
+                guard let left = reading.percentRemaining else { return nil }
+                return (id, left, snap.sourceDate)
+            }
+
         let recent = candidates
             .filter { $0.2.map { Date().timeIntervalSince($0) < 1800 } ?? false }
             .max { ($0.2 ?? .distantPast) < ($1.2 ?? .distantPast) }
@@ -151,22 +150,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         setStatusPresentation(chosen.map { ($0.0, $0.1) }, isActive: recent != nil)
     }
 
-    /// Whichever window has least left. An unavailable window can't be the
-    /// worst — we genuinely don't know where it stands.
     private func worstWindow(of snap: Snapshot) -> (QuotaWindow, Reading) {
-        let ranked = QuotaWindow.allCases.compactMap { w -> (QuotaWindow, Reading, Double)? in
+        let isShortHidden = preferences.isShortLimitHidden(for: snap.provider)
+        let windows: [QuotaWindow] = isShortHidden ? [.long] : QuotaWindow.allCases
+
+        let ranked = windows.compactMap { w -> (QuotaWindow, Reading, Double)? in
             guard let r = snap.readings[w], let left = r.percentRemaining else { return nil }
             return (w, r, left)
         }.sorted { $0.2 < $1.2 }
         if let top = ranked.first { return (top.0, top.1) }
-        return (.short, snap.readings[.short] ?? .unavailable(reason: "no data"))
+        return (.long, snap.readings[.long] ?? snap.readings[.short] ?? .unavailable(reason: "no data"))
     }
 
     // MARK: - Status item
 
-    /// The needle is the gauge. `gauge.with.dots.needle.bottom.0percent` is a
-    /// variable-value symbol, so the needle sweeps continuously with what's left
-    /// rather than snapping between a few fixed images.
     private func setStatusPresentation(_ chosen: (ProviderID, Double)?, isActive: Bool) {
         guard let button = statusItem.button else { return }
 
@@ -178,7 +175,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         button.image = symbol(left / 100)
-        // Name it. "37%" alone can't say which agent it speaks for.
         button.title = " \(id.displayName) \(Int(left.rounded()))%"
         button.toolTip = isActive
             ? "\(id.displayName): \(Int(left.rounded()))% left — the agent you're using now"
@@ -196,18 +192,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Menu construction
 
+    private func rebuildMenu() {
+        statusItem.menu = buildMenu()
+        apply(snapshots)
+    }
+
     private func buildMenu() -> NSMenu {
         let menu = NSMenu()
-        // Without this, AppKit disables every item that has no action — which is
-        // every data row — and the whole menu renders as greyed-out text.
         menu.autoenablesItems = false
         menu.delegate = self
 
-        for id in installed {
+        rowViews.removeAll()
+        metaItems.removeAll()
+
+        for id in installed where !preferences.isProviderHidden(id) {
             buildAgentRows(for: id, into: menu)
         }
 
         buildSilentAgents(into: menu)
+        buildPreferencesMenu(into: menu)
         buildStandardActions(into: menu)
 
         menu.items.forEach { if $0.action != nil { $0.target = self } }
@@ -221,7 +224,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(header)
 
         var views: [QuotaWindow: MenuRowView] = [:]
+        let hideShort = preferences.isShortLimitHidden(for: id)
+
         for window in QuotaWindow.allCases {
+            if window == .short && hideShort { continue }
             let view = MenuRowView(title: window == .short ? "5 hours" : "This week")
             let item = NSMenuItem()
             item.view = view
@@ -237,7 +243,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(meta)
         metaItems[id] = meta
 
-        // Only Claude needs calibrating — Codex reports real percentages.
         if id == .claude {
             let item = NSMenuItem(title: "Calibrate from Claude's usage page…",
                                   action: #selector(calibrateAction), keyEquivalent: "")
@@ -250,10 +255,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
     }
 
-    // Agents that exist but yield no numbers get one honest line each, so a
-    // missing agent reads as "looked for, here's why" rather than as a bug.
     private func buildSilentAgents(into menu: NSMenu) {
-        let silent = providers.filter { !$0.canReportUsage || !$0.isInstalled() }
+        let silent = providers.filter {
+            (!preferences.isProviderHidden($0.id)) && (!$0.canReportUsage || !$0.isInstalled())
+        }
         guard !silent.isEmpty else { return }
 
         for p in silent {
@@ -267,6 +272,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(item)
         }
         menu.addItem(.separator())
+    }
+
+    private func buildPreferencesMenu(into menu: NSMenu) {
+        let prefsItem = NSMenuItem(title: "Preferences", action: nil, keyEquivalent: "")
+        let subMenu = NSMenu()
+        subMenu.autoenablesItems = false
+
+        // Toggle Providers
+        let providersHeader = NSMenuItem(title: "Show Providers", action: nil, keyEquivalent: "")
+        providersHeader.isEnabled = false
+        subMenu.addItem(providersHeader)
+
+        for provider in ProviderID.allCases {
+            let isVisible = !preferences.isProviderHidden(provider)
+            let item = NSMenuItem(
+                title: "  \(provider.displayName)",
+                action: #selector(toggleProviderAction(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = provider.rawValue
+            item.state = isVisible ? .on : .off
+            item.isEnabled = true
+            subMenu.addItem(item)
+        }
+
+        subMenu.addItem(.separator())
+
+        // Toggle 5-Hour Limits
+        let limitsHeader = NSMenuItem(title: "Hide 5-Hour Limits", action: nil, keyEquivalent: "")
+        limitsHeader.isEnabled = false
+        subMenu.addItem(limitsHeader)
+
+        for provider in ProviderID.allCases {
+            let isHidden = preferences.isShortLimitHidden(for: provider)
+            let item = NSMenuItem(
+                title: "  \(provider.displayName) 5-Hour Limit",
+                action: #selector(toggleShortLimitAction(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = provider.rawValue
+            item.state = isHidden ? .on : .off
+            item.isEnabled = true
+            subMenu.addItem(item)
+        }
+
+        prefsItem.submenu = subMenu
+        menu.addItem(prefsItem)
+        menu.addItem(.separator())
+    }
+
+    @objc private func toggleProviderAction(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let provider = ProviderID(rawValue: raw) else { return }
+        let currentHidden = preferences.isProviderHidden(provider)
+        preferences.setProviderHidden(provider, hidden: !currentHidden)
+        rebuildMenu()
+    }
+
+    @objc private func toggleShortLimitAction(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let provider = ProviderID(rawValue: raw) else { return }
+        let currentHidden = preferences.isShortLimitHidden(for: provider)
+        preferences.setShortLimitHidden(provider, hidden: !currentHidden)
+        rebuildMenu()
     }
 
     private func buildStandardActions(into menu: NSMenu) {
@@ -292,9 +363,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let p = NSMutableParagraphStyle()
         p.firstLineHeadIndent = indent
         p.headIndent = indent
-        // A menu item shows one line. Without this, an over-long string wraps and
-        // the remainder is silently dropped — the reader sees a sentence that
-        // just stops. Truncating at least admits that something was cut.
         p.lineBreakMode = .byTruncatingTail
         return NSAttributedString(string: text, attributes: [
             .font: NSFont.systemFont(ofSize: 11),
@@ -303,7 +371,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ])
     }
 
-    /// Right-hand text on a row: what's left, plus how much to trust it.
     private func detail(for reading: Reading) -> String {
         switch reading {
         case .authoritative:
@@ -315,13 +382,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// The line under each agent's rows: how much to trust these numbers, and
-    /// when they turn over. Kept short — it has to fit the menu without wrapping.
     private func metaLine(for snap: Snapshot) -> String {
         var bits: [String] = []
 
-        // Codex reports real server-side percentages; Claude's are inferred from
-        // local token counts. Since the capsules no longer distinguish them, say so.
         let exact = QuotaWindow.allCases.contains { snap.readings[$0]?.isExact == true }
         if exact {
             if let plan = snap.planLabel { bits.append(plan) }
@@ -331,12 +394,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                                        : "estimated · uncalibrated")
         }
 
+        if let banked = snap.bankedResets, banked > 0 {
+            bits.append("\(banked) banked reset\(banked == 1 ? "" : "s")")
+        }
+
         if let resets = QuotaWindow.allCases.compactMap({ snap.readings[$0]?.resetsAt }).min() {
             bits.append("resets \(RelativeDateTimeFormatter().localizedString(for: resets, relativeTo: Date()))")
         }
         if let age = snap.staleness, age > 1800 {
-            // Minutes stop being readable past an hour or so: "stale 1066m"
-            // makes the reader do arithmetic to learn "yesterday".
             let mins = Int(age / 60)
             bits.append(mins < 90 ? "stale \(mins)m" : "stale \(Int((age / 3600).rounded()))h")
         }
@@ -345,17 +410,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - Calibration
 
-    /// Anchor the estimate to the numbers Claude itself reports.
-    ///
-    /// Better than waiting for a rate-limit rejection: it works on first run,
-    /// needs no outage, and re-anchors against the figure the vendor actually
-    /// enforces — including claude.ai and desktop-app usage, which shares the
-    /// plan limit but never appears in the local Claude Code logs.
-    ///
-    /// The weekly reset day and hour live here too. They are not cosmetic: the
-    /// weekly window is a fixed calendar window, so the wrong anchor sums the
-    /// wrong days. It defaults to Friday 6:00 AM, which is one account's
-    /// schedule, not everyone's.
     @objc private func calibrateAction() {
         guard let snap = snapshots[.claude] else { return }
         let calibration = CalibrationStore.load()
@@ -397,12 +451,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let longField = percentField()
 
         let weekdayPopup = NSPopUpButton()
-        // Calendar.current, not Calendar(identifier:) — a calendar built with no
-        // locale silently hands back abbreviated symbols ("Fri"), which read as a
-        // clipped label rather than a deliberate one.
         weekdayPopup.addItems(withTitles: Calendar.current.weekdaySymbols)
         weekdayPopup.selectItem(at: min(6, max(0, calibration.weeklyResetWeekday - 1)))
-        // Wide enough for "Wednesday" — otherwise it silently clips to "Wed".
         weekdayPopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 116).isActive = true
 
         let hourPopup = NSPopUpButton()
@@ -428,15 +478,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        let newWeekday = weekdayPopup.indexOfSelectedItem + 1     // Calendar: 1 = Sunday
+        let newWeekday = weekdayPopup.indexOfSelectedItem + 1
         let newHour = hourPopup.indexOfSelectedItem
         let anchorMoved = newWeekday != calibration.weeklyResetWeekday
                        || newHour != calibration.weeklyResetHour
 
-        // Persist the anchor before deriving anything from it. The weekly total
-        // is a function of the window, so a percentage typed in now has to be
-        // divided by a sum measured under the *new* window — using the old sum
-        // would bake the wrong capacity in at the moment of correcting it.
         var updated = calibration
         updated.weeklyResetWeekday = newWeekday
         updated.weeklyResetHour = newHour
@@ -450,7 +496,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task.detached(priority: .userInitiated) {
             var raw = fallback
             if anchorMoved, let fresh = try? claude?.snapshot(), let r = fresh.rawWeighted {
-                raw = r                       // re-measured under the new window
+                raw = r
             }
             let measured = raw
             await MainActor.run { [weak self] in
@@ -469,7 +515,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Accepts "54", "54%", " 54 % " — people paste what they see.
     private static func percent(from text: String) -> Double? {
         let cleaned = text.replacingOccurrences(of: "%", with: "")
             .trimmingCharacters(in: .whitespaces)
