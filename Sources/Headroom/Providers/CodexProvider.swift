@@ -25,9 +25,14 @@ struct CodexProvider: UsageProvider {
     func watchRoots() -> [URL] { [sessionsRoot] }
 
     func isInstalled() -> Bool {
-        var isDir: ObjCBool = false
-        let ok = FileManager.default.fileExists(atPath: sessionsRoot.path, isDirectory: &isDir)
-        return ok && isDir.boolValue
+        var st = stat()
+        guard lstat(sessionsRoot.path, &st) == 0 else { return false }
+        guard (st.st_mode & S_IFMT) == S_IFDIR else { return false }
+        guard (st.st_mode & S_IFMT) != S_IFLNK else { return false }
+        guard st.st_uid == geteuid() else { return false }
+        guard (st.st_mode & 0o022) == 0 else { return false }
+        guard PosixSecurity.verifyACLSafety(path: sessionsRoot.path) else { return false }
+        return true
     }
 
     func snapshot() throws -> Snapshot {
@@ -123,11 +128,17 @@ struct CodexProvider: UsageProvider {
     /// by mtime. Bounded, so this stays a few dozen stats rather than thousands.
     private func newestRollouts(limit: Int = 5) -> [URL] {
         let fm = FileManager.default
+        let rootPath = sessionsRoot.path
+
         func kids(_ url: URL) -> [URL] {
+            guard PosixSecurity.verifyDirectoryChain(basePath: rootPath, targetPath: url.path) else { return [] }
             let items = (try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isDirectoryKey],
                                                      options: [.skipsHiddenFiles])) ?? []
             return items
-                .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+                .filter { item in
+                    guard PosixSecurity.verifyDirectoryChain(basePath: rootPath, targetPath: item.path) else { return false }
+                    return (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+                }
                 .sorted { $0.lastPathComponent > $1.lastPathComponent }
         }
 
@@ -137,11 +148,14 @@ struct CodexProvider: UsageProvider {
 
         var candidates: [(url: URL, modified: Date)] = []
         for day in days {
+            guard PosixSecurity.verifyDirectoryChain(basePath: rootPath, targetPath: day.path) else { continue }
             let files = ((try? fm.contentsOfDirectory(at: day,
                             includingPropertiesForKeys: [.contentModificationDateKey],
                             options: [.skipsHiddenFiles])) ?? [])
                 .filter { $0.pathExtension == "jsonl" && $0.lastPathComponent.hasPrefix("rollout-") }
             for f in files {
+                guard PosixSecurity.verifyDirectoryChain(basePath: rootPath, targetPath: f.path) else { continue }
+                guard PosixSecurity.verifyACLSafety(path: f.path) else { continue }
                 let m = (try? f.resourceValues(forKeys: [.contentModificationDateKey]))?
                     .contentModificationDate ?? .distantPast
                 candidates.append((f, m))
@@ -157,7 +171,36 @@ struct CodexProvider: UsageProvider {
     private static let marker = Data("token_count".utf8)
 
     private func lastQuotaEvent(in url: URL) throws -> Hit? {
-        let handle = try FileHandle(forReadingFrom: url)
+        let rootPath = sessionsRoot.path
+        guard PosixSecurity.verifyDirectoryChain(basePath: rootPath, targetPath: url.path) else { return nil }
+        guard PosixSecurity.verifyACLSafety(path: url.path) else { return nil }
+
+        let flags = O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
+        let fd = open(url.path, flags)
+        guard fd >= 0 else { return nil }
+
+        var st = stat()
+        guard fstat(fd, &st) == 0 else {
+            close(fd)
+            return nil
+        }
+
+        guard (st.st_mode & S_IFMT) == S_IFREG else {
+            close(fd)
+            return nil
+        }
+
+        guard st.st_uid == geteuid() else {
+            close(fd)
+            return nil
+        }
+
+        guard (st.st_mode & 0o022) == 0 else {
+            close(fd)
+            return nil
+        }
+
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         defer { try? handle.close() }
 
         let size = try handle.seekToEnd()

@@ -1,6 +1,10 @@
 import XCTest
 @testable import Headroom
 
+private final class ResetCollector: @unchecked Sendable {
+    var resets: [ResetDetector.ResetType] = []
+}
+
 final class PreferencesAndResetTests: XCTestCase {
 
     func testPreferencesStoreProviderVisibility() {
@@ -54,9 +58,9 @@ final class PreferencesAndResetTests: XCTestCase {
     }
 
     func testResetDetectorIdentifiesAbnormalFreeReset() {
-        var notifiedResets: [ResetDetector.ResetType] = []
+        let collector = ResetCollector()
         let detector = ResetDetector(center: nil, onNotification: { reset in
-            notifiedResets.append(reset)
+            collector.resets.append(reset)
         })
         let now = Date(timeIntervalSince1970: 1700000000)
         let futureReset = now.addingTimeInterval(7200)
@@ -74,7 +78,7 @@ final class PreferencesAndResetTests: XCTestCase {
 
         let initial = detector.inspect(snapshots: snap1, now: now)
         XCTAssertTrue(initial.isEmpty)
-        XCTAssertTrue(notifiedResets.isEmpty)
+        XCTAssertTrue(collector.resets.isEmpty)
 
         // Mid-window reset to 0% before reset time
         let snap2 = [
@@ -90,7 +94,7 @@ final class PreferencesAndResetTests: XCTestCase {
 
         let resets = detector.inspect(snapshots: snap2, now: now.addingTimeInterval(300))
         XCTAssertEqual(resets.count, 1)
-        XCTAssertEqual(notifiedResets.count, 1)
+        XCTAssertEqual(collector.resets.count, 1)
         if case .abnormalFreeReset(let provider, let window, let drop) = resets[0] {
             XCTAssertEqual(provider, .codex)
             XCTAssertEqual(window, .short)
@@ -101,9 +105,9 @@ final class PreferencesAndResetTests: XCTestCase {
     }
 
     func testClaudeCalibrationDoesNotTriggerFreeReset() {
-        var notifiedResets: [ResetDetector.ResetType] = []
+        let collector = ResetCollector()
         let detector = ResetDetector(center: nil, onNotification: { reset in
-            notifiedResets.append(reset)
+            collector.resets.append(reset)
         })
         let now = Date(timeIntervalSince1970: 1700000000)
         let futureReset = now.addingTimeInterval(7200)
@@ -135,13 +139,13 @@ final class PreferencesAndResetTests: XCTestCase {
 
         let resets = detector.inspect(snapshots: snap2, now: now.addingTimeInterval(300))
         XCTAssertTrue(resets.isEmpty, "Estimated readings must not trigger free quota reset alerts")
-        XCTAssertTrue(notifiedResets.isEmpty)
+        XCTAssertTrue(collector.resets.isEmpty)
     }
 
     func testScheduledResetDetectedEvenIfUsageIncreases() {
-        var notifiedResets: [ResetDetector.ResetType] = []
+        let collector = ResetCollector()
         let detector = ResetDetector(center: nil, onNotification: { reset in
-            notifiedResets.append(reset)
+            collector.resets.append(reset)
         })
         let now = Date(timeIntervalSince1970: 1700000000)
         let firstReset = now.addingTimeInterval(3600)
@@ -183,9 +187,9 @@ final class PreferencesAndResetTests: XCTestCase {
     }
 
     func testDeadlineChangeBeforeExpiryDoesNotTriggerResetNotification() {
-        var notifiedResets: [ResetDetector.ResetType] = []
+        let collector = ResetCollector()
         let detector = ResetDetector(center: nil, onNotification: { reset in
-            notifiedResets.append(reset)
+            collector.resets.append(reset)
         })
         let now = Date(timeIntervalSince1970: 1700000000)
         let originalDeadline = now.addingTimeInterval(7200) // 2 hours in the future
@@ -218,6 +222,6 @@ final class PreferencesAndResetTests: XCTestCase {
 
         let resets = detector.inspect(snapshots: snap2, now: intermediateNow)
         XCTAssertTrue(resets.isEmpty, "A later reset deadline before the previous deadline expired must not trigger a reset notification")
-        XCTAssertTrue(notifiedResets.isEmpty)
+        XCTAssertTrue(collector.resets.isEmpty)
     }
 }

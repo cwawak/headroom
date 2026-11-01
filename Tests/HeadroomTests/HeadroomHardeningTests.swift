@@ -8,14 +8,34 @@ final class HeadroomHardeningTests: XCTestCase {
     override func setUp() {
         super.setUp()
         tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("HeadroomTests_\(UUID().uuidString)")
-        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        createSecureDirectory(at: tempDir)
     }
 
     override func tearDown() {
         if let tempDir = tempDir {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: tempDir.path)
             try? FileManager.default.removeItem(at: tempDir)
         }
         super.tearDown()
+    }
+
+    @discardableResult
+    private func createSecureDirectory(at url: URL) -> Bool {
+        let fm = FileManager.default
+        let standardized = url.standardized
+        guard (try? fm.createDirectory(at: standardized, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])) != nil else {
+            return false
+        }
+        if let root = tempDir, standardized.path.hasPrefix(root.path) {
+            var cur = root
+            let rel = standardized.path.dropFirst(root.path.count)
+            let parts = rel.split(separator: "/")
+            for part in parts {
+                cur = cur.appendingPathComponent(String(part), isDirectory: true)
+                try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: cur.path)
+            }
+        }
+        return true
     }
 
     // MARK: - Legacy Migration Security Tests
@@ -24,7 +44,7 @@ final class HeadroomHardeningTests: XCTestCase {
         let appSupport = tempDir.appendingPathComponent("AppSupport")
         let legacyDir = appSupport.appendingPathComponent("NotchGauge")
         let headroomDir = appSupport.appendingPathComponent("Headroom")
-        try? FileManager.default.createDirectory(at: legacyDir, withIntermediateDirectories: true)
+        createSecureDirectory(at: legacyDir)
 
         let legacyFile = legacyDir.appendingPathComponent("calibration.json")
         let cal = Calibration(shortCapacity: 5000, longCapacity: 50000, shortObservations: 1, longObservations: 1)
@@ -50,8 +70,8 @@ final class HeadroomHardeningTests: XCTestCase {
         let appSupport = tempDir.appendingPathComponent("AppSupport")
         let legacyDir = appSupport.appendingPathComponent("NotchGauge")
         let realDir = tempDir.appendingPathComponent("RealDir")
-        try? FileManager.default.createDirectory(at: legacyDir, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: realDir, withIntermediateDirectories: true)
+        createSecureDirectory(at: legacyDir)
+        createSecureDirectory(at: realDir)
 
         let realFile = realDir.appendingPathComponent("real_cal.json")
         let cal = Calibration(shortCapacity: 7000, longCapacity: 70000, shortObservations: 1, longObservations: 1)
@@ -73,7 +93,7 @@ final class HeadroomHardeningTests: XCTestCase {
         // Mode bit check verification
         let appSupport = tempDir.appendingPathComponent("AppSupport")
         let legacyDir = appSupport.appendingPathComponent("NotchGauge")
-        try? FileManager.default.createDirectory(at: legacyDir, withIntermediateDirectories: true)
+        createSecureDirectory(at: legacyDir)
 
         let legacyFile = legacyDir.appendingPathComponent("calibration.json")
         let cal = Calibration(shortCapacity: 9000, longCapacity: 90000, shortObservations: 1, longObservations: 1)
@@ -141,7 +161,7 @@ final class HeadroomHardeningTests: XCTestCase {
 
     func testRetentionAndFutureDatedRecords() {
         let projectsDir = tempDir.appendingPathComponent(".claude/projects")
-        try? FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
+        createSecureDirectory(at: projectsDir)
 
         let now = Date(timeIntervalSince1970: 1700000000)
         let formatter = ISO8601DateFormatter()
@@ -182,7 +202,7 @@ final class HeadroomHardeningTests: XCTestCase {
 
     func testDeduplicationAndOut0fOrderRecords() {
         let projectsDir = tempDir.appendingPathComponent(".claude/projects")
-        try? FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
+        createSecureDirectory(at: projectsDir)
 
         let now = Date(timeIntervalSince1970: 1700000000)
         let formatter = ISO8601DateFormatter()
@@ -210,8 +230,8 @@ final class HeadroomHardeningTests: XCTestCase {
     func testSymlinkRootAndEscapeRejection() {
         let projectsDir = tempDir.appendingPathComponent(".claude/projects")
         let outsideDir = tempDir.appendingPathComponent("Outside")
-        try? FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: outsideDir, withIntermediateDirectories: true)
+        createSecureDirectory(at: projectsDir)
+        createSecureDirectory(at: outsideDir)
 
         // Symlinked file inside root pointing outside
         let outsideFile = outsideDir.appendingPathComponent("secret.jsonl")
@@ -234,7 +254,7 @@ final class HeadroomHardeningTests: XCTestCase {
     func testCodexProviderNewestRolloutsDirectoryTraversal() throws {
         let sessionsDir = tempDir.appendingPathComponent(".codex/sessions")
         let dayDir = sessionsDir.appendingPathComponent("2025/01/15")
-        try FileManager.default.createDirectory(at: dayDir, withIntermediateDirectories: true)
+        createSecureDirectory(at: dayDir)
 
         let rolloutFile = dayDir.appendingPathComponent("rollout-1.jsonl")
         let resetsAt = Date().addingTimeInterval(3600).timeIntervalSince1970
@@ -284,8 +304,8 @@ final class HeadroomHardeningTests: XCTestCase {
     func testIsSecureChildSymlinks() {
         let baseDir = tempDir.appendingPathComponent("BaseDir")
         let outsideDir = tempDir.appendingPathComponent("OutsideDir")
-        try? FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
-        try? FileManager.default.createDirectory(at: outsideDir, withIntermediateDirectories: true)
+        createSecureDirectory(at: baseDir)
+        createSecureDirectory(at: outsideDir)
 
         // 1. Target file outside base root
         let outsideFile = outsideDir.appendingPathComponent("secret.txt")
@@ -299,7 +319,7 @@ final class HeadroomHardeningTests: XCTestCase {
 
         // 2. Target file inside base root
         let insideSubdir = baseDir.appendingPathComponent("SubDir")
-        try? FileManager.default.createDirectory(at: insideSubdir, withIntermediateDirectories: true)
+        createSecureDirectory(at: insideSubdir)
         let insideFile = insideSubdir.appendingPathComponent("safe.txt")
         try! "safe".write(to: insideFile, atomically: true, encoding: .utf8)
 
@@ -314,7 +334,7 @@ final class HeadroomHardeningTests: XCTestCase {
 
     func testOversizedLogRecordHandling() {
         let projectsDir = tempDir.appendingPathComponent(".claude/projects")
-        try? FileManager.default.createDirectory(at: projectsDir, withIntermediateDirectories: true)
+        createSecureDirectory(at: projectsDir)
 
         let now = Date(timeIntervalSince1970: 1700000000)
         let logFile = projectsDir.appendingPathComponent("oversized.jsonl")
@@ -335,6 +355,193 @@ final class HeadroomHardeningTests: XCTestCase {
             XCTAssertTrue(reason.contains("oversized log record (>8 MiB)"))
         } else {
             XCTFail("Expected unavailable reading due to oversized log record")
+        }
+
+        // Take a second snapshot on the same provider instance with no file changes;
+        // persistent record-loss status must be preserved rather than reporting 0% used.
+        let snap2 = try! provider.snapshot()
+        if case .unavailable(let reason) = snap2.readings[.short] {
+            XCTAssertTrue(reason.contains("oversized log record (>8 MiB)"))
+        } else {
+            XCTFail("Expected second snapshot to remain unavailable due to persistent record loss, got \(String(describing: snap2.readings[.short]))")
+        }
+    }
+
+    func testClaudeDirectoryChainValidationRejectsInsecureSubdirectory() {
+        let projectsDir = tempDir.appendingPathComponent(".claude/projects")
+        let unsafeSubdir = projectsDir.appendingPathComponent("project_insecure")
+        createSecureDirectory(at: unsafeSubdir)
+
+        let logFile = unsafeSubdir.appendingPathComponent("session.jsonl")
+        let record = "{\"timestamp\":\"2025-01-01T00:00:00Z\",\"requestId\":\"r1\",\"message\":{\"model\":\"claude-3-sonnet\",\"usage\":{\"input_tokens\":100,\"output_tokens\":50}}}\n"
+        try! record.write(to: logFile, atomically: true, encoding: .utf8)
+
+        // Make the subdirectory world-writable (violating PosixSecurity directory chain checks)
+        try! FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: unsafeSubdir.path)
+
+        let provider = ClaudeProvider()
+        provider.customProjectsRoot = projectsDir
+        provider.customAgentModeRoot = tempDir.appendingPathComponent("MissingAgentMode")
+
+        let snap = try! provider.snapshot()
+
+        if case .unavailable(let reason) = snap.readings[.short] {
+            XCTAssertTrue(reason.contains("insecure directory chain"))
+        } else {
+            XCTFail("Expected snapshot to be unavailable due to insecure directory chain")
+        }
+    }
+
+    func testClaudeIngestFileRejectsInsecureFilePermissions() {
+        let projectsDir = tempDir.appendingPathComponent(".claude/projects")
+        let subDir = projectsDir.appendingPathComponent("safe_project")
+        createSecureDirectory(at: subDir)
+
+        let logFile = subDir.appendingPathComponent("session.jsonl")
+        let record = "{\"timestamp\":\"2025-01-01T00:00:00Z\",\"requestId\":\"r1\",\"message\":{\"model\":\"claude-3-sonnet\",\"usage\":{\"input_tokens\":100,\"output_tokens\":50}}}\n"
+        try! record.write(to: logFile, atomically: true, encoding: .utf8)
+
+        // Make the file world-writable
+        try! FileManager.default.setAttributes([.posixPermissions: 0o666], ofItemAtPath: logFile.path)
+
+        let provider = ClaudeProvider()
+        provider.customProjectsRoot = projectsDir
+        provider.customAgentModeRoot = tempDir.appendingPathComponent("MissingAgentMode")
+
+        let snap = try! provider.snapshot()
+        if case .unavailable(let reason) = snap.readings[.short] {
+            XCTAssertTrue(reason.contains("insecure file permissions"))
+        } else {
+            XCTFail("Expected snapshot to be unavailable when log file has insecure permissions")
+        }
+    }
+
+    func testClaudeRecoveryAfterDirectoryPermissionsRepaired() {
+        let projectsDir = tempDir.appendingPathComponent(".claude/projects")
+        let subDir = projectsDir.appendingPathComponent("repaired_project")
+        createSecureDirectory(at: subDir)
+
+        let logFile = subDir.appendingPathComponent("session.jsonl")
+        let record = "{\"timestamp\":\"2025-01-01T00:00:00Z\",\"requestId\":\"r1\",\"message\":{\"model\":\"claude-3-sonnet\",\"usage\":{\"input_tokens\":100,\"output_tokens\":50}}}\n"
+        try! record.write(to: logFile, atomically: true, encoding: .utf8)
+
+        // Make subDir world-writable initially
+        try! FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: subDir.path)
+
+        let provider = ClaudeProvider()
+        provider.customProjectsRoot = projectsDir
+        provider.customAgentModeRoot = tempDir.appendingPathComponent("MissingAgentMode")
+
+        // 1. Initial snapshot fails with insecure directory chain
+        let snap1 = try! provider.snapshot()
+        if case .unavailable(let reason) = snap1.readings[.short] {
+            XCTAssertTrue(reason.contains("insecure directory chain"))
+        } else {
+            XCTFail("Expected unavailable reading due to insecure directory chain")
+        }
+
+        // 2. Repair directory permissions
+        try! FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: subDir.path)
+
+        // 3. Subsequent snapshot on the same provider instance recovers successfully
+        let snap2 = try! provider.snapshot()
+        XCTAssertNotNil(snap2.rawWeighted?[.short], "Snapshot should recover valid readings once directory permissions are repaired")
+    }
+
+    // MARK: - CodexProvider Hardening Tests
+
+    func testCodexProviderRejectsSymlinkSessionsRoot() {
+        let realSessionsDir = tempDir.appendingPathComponent(".codex/real_sessions")
+        createSecureDirectory(at: realSessionsDir)
+
+        let symlinkSessionsDir = tempDir.appendingPathComponent(".codex/linked_sessions")
+        try? FileManager.default.createSymbolicLink(at: symlinkSessionsDir, withDestinationURL: realSessionsDir)
+
+        var provider = CodexProvider()
+        provider.customSessionsRoot = symlinkSessionsDir
+
+        XCTAssertFalse(provider.isInstalled(), "CodexProvider must reject sessionsRoot if it is a symbolic link")
+        let snap = try! provider.snapshot()
+        if case .unavailable(let reason) = snap.readings[.short] {
+            XCTAssertTrue(reason.contains("Codex not installed"))
+        } else {
+            XCTFail("Expected unavailable reading when sessionsRoot is a symlink")
+        }
+    }
+
+    func testCodexProviderRejectsInsecureDirectoryChain() throws {
+        let sessionsDir = tempDir.appendingPathComponent(".codex/sessions")
+        let dayDir = sessionsDir.appendingPathComponent("2025/01/15")
+        createSecureDirectory(at: dayDir)
+
+        let rolloutFile = dayDir.appendingPathComponent("rollout-1.jsonl")
+        let resetsAt = Date().addingTimeInterval(3600).timeIntervalSince1970
+        let jsonRecord = "{\"timestamp\":\"2025-01-15T12:00:00Z\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"limit_id\":\"codex\",\"plan_type\":\"pro\",\"primary\":{\"used_percent\":25.0,\"window_minutes\":300,\"resets_at\":\(resetsAt)}}}}\n"
+        try jsonRecord.write(to: rolloutFile, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: rolloutFile.path)
+
+        // Make the day directory world-writable
+        try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: dayDir.path)
+
+        var provider = CodexProvider()
+        provider.customSessionsRoot = sessionsDir
+
+        let snap = try provider.snapshot()
+        if case .unavailable(let reason) = snap.readings[.short] {
+            XCTAssertTrue(reason.contains("No sessions yet") || reason.contains("No quota event"))
+        } else {
+            XCTFail("Expected snapshot to be unavailable when directory chain is insecure")
+        }
+    }
+
+    func testCodexProviderRejectsSymlinkedRolloutFile() throws {
+        let sessionsDir = tempDir.appendingPathComponent(".codex/sessions")
+        let dayDir = sessionsDir.appendingPathComponent("2025/01/15")
+        let outsideDir = tempDir.appendingPathComponent("outside")
+        createSecureDirectory(at: dayDir)
+        createSecureDirectory(at: outsideDir)
+
+        let realFile = outsideDir.appendingPathComponent("real-rollout.jsonl")
+        let resetsAt = Date().addingTimeInterval(3600).timeIntervalSince1970
+        let jsonRecord = "{\"timestamp\":\"2025-01-15T12:00:00Z\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"limit_id\":\"codex\",\"plan_type\":\"pro\",\"primary\":{\"used_percent\":25.0,\"window_minutes\":300,\"resets_at\":\(resetsAt)}}}}\n"
+        try jsonRecord.write(to: realFile, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: realFile.path)
+
+        let symlinkedRolloutFile = dayDir.appendingPathComponent("rollout-1.jsonl")
+        try FileManager.default.createSymbolicLink(at: symlinkedRolloutFile, withDestinationURL: realFile)
+
+        var provider = CodexProvider()
+        provider.customSessionsRoot = sessionsDir
+
+        let snap = try provider.snapshot()
+        if case .unavailable(let reason) = snap.readings[.short] {
+            XCTAssertTrue(reason.contains("No sessions yet") || reason.contains("No quota event"))
+        } else {
+            XCTFail("Expected snapshot to be unavailable when rollout file is a symlink")
+        }
+    }
+
+    func testCodexProviderRejectsInsecureRolloutFilePermissions() throws {
+        let sessionsDir = tempDir.appendingPathComponent(".codex/sessions")
+        let dayDir = sessionsDir.appendingPathComponent("2025/01/15")
+        createSecureDirectory(at: dayDir)
+
+        let rolloutFile = dayDir.appendingPathComponent("rollout-1.jsonl")
+        let resetsAt = Date().addingTimeInterval(3600).timeIntervalSince1970
+        let jsonRecord = "{\"timestamp\":\"2025-01-15T12:00:00Z\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"limit_id\":\"codex\",\"plan_type\":\"pro\",\"primary\":{\"used_percent\":25.0,\"window_minutes\":300,\"resets_at\":\(resetsAt)}}}}\n"
+        try jsonRecord.write(to: rolloutFile, atomically: true, encoding: .utf8)
+
+        // Make rollout file world-writable
+        try FileManager.default.setAttributes([.posixPermissions: 0o666], ofItemAtPath: rolloutFile.path)
+
+        var provider = CodexProvider()
+        provider.customSessionsRoot = sessionsDir
+
+        let snap = try provider.snapshot()
+        if case .unavailable(let reason) = snap.readings[.short] {
+            XCTAssertTrue(reason.contains("No sessions yet") || reason.contains("No quota event"))
+        } else {
+            XCTFail("Expected snapshot to be unavailable when rollout file has insecure permissions")
         }
     }
 }
