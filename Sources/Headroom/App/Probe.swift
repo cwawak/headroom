@@ -5,7 +5,7 @@ import Foundation
 /// to find out what broke.
 enum Probe {
     static func run() {
-        let providers: [any UsageProvider] = [CodexProvider(), ClaudeProvider()]
+        let providers: [any UsageProvider] = [CodexProvider(), ClaudeProvider(), AntigravityProvider()]
         for p in providers {
             print("── \(p.id.displayName) ──")
             print("installed: \(p.isInstalled())")
@@ -16,6 +16,9 @@ enum Probe {
                 print(String(format: "parsed in %.1f ms", Date().timeIntervalSince(t0) * 1000))
                 print("plan: \(snap.planLabel ?? "—")")
                 if let s = snap.staleness { print(String(format: "source age: %.1f min", s / 60)) }
+                if let banked = snap.bankedResets {
+                    print("banked resets: \(banked)")
+                }
                 if let raw = snap.rawWeighted {
                     for w in QuotaWindow.allCases where raw[w] != nil {
                         print(String(format: "raw weighted %@: %.0f", w.shortLabel, raw[w]!))

@@ -152,7 +152,7 @@ final class ProbeTests: XCTestCase {
     func testPrintReadingsExecutesWithoutErrorForEmptySnapshot() {
         let now = Date(timeIntervalSince1970: 1700000000)
         let snapshot = Snapshot(
-            provider: .gemini,
+            provider: .antigravity,
             readings: [:],
             capturedAt: now,
             sourceDate: nil,
