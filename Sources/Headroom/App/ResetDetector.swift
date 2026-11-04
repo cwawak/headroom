@@ -36,6 +36,7 @@ final class ResetDetector: @unchecked Sendable {
         var detected: [ResetType] = []
 
         for (provider, snap) in snapshots {
+            guard !snap.isCached else { continue }
             var prevMap = previousReadings[provider] ?? [:]
 
             for window in QuotaWindow.allCases {
