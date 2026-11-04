@@ -125,7 +125,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             for window in QuotaWindow.allCases {
                 guard let view = rowViews[id]?[window] else { continue }
                 let reading = snap.readings[window] ?? .unavailable(reason: "no data")
-                view.configure(reading: reading, detail: detail(for: reading))
+                let detail = snap.isCached && reading.percentRemaining != nil
+                    ? "\(Int(reading.percentRemaining!.rounded()))% cached" : detail(for: reading)
+                view.configure(reading: reading, detail: detail)
             }
             metaItems[id]?.attributedTitle = secondary(metaLine(for: snap), indent: 21)
         }
@@ -134,7 +136,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let candidates = installed
             .filter { !preferences.isProviderHidden($0) }
             .compactMap { id -> (ProviderID, Double, Date?)? in
-                guard let snap = snaps[id] else { return nil }
+                guard let snap = snaps[id], !snap.isCached else { return nil }
                 // User requirement: Focus on weekly, falling back to worst available if weekly has no valid reading
                 let weeklyReading = snap.readings[.long]
                 let reading = (weeklyReading?.percentRemaining != nil) ? weeklyReading! : worstWindow(of: snap).1
@@ -388,7 +390,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let exact = QuotaWindow.allCases.contains { snap.readings[$0]?.isExact == true }
         if exact {
             if let plan = snap.planLabel { bits.append(plan) }
-            bits.append("exact")
+            bits.append(snap.isCached ? "cached" : "exact")
+        } else if snap.provider == .codex {
+            bits.append("usage unavailable")
         } else {
             bits.append(snap.planLabel == "calibrated" ? "estimated · calibrated"
                                                        : "estimated · uncalibrated")

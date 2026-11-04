@@ -25,6 +25,6 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>Reads local agent logs only. No network access.</string>
+	<string>Reads agent usage without model token consumption. Codex usage is refreshed through the installed CLI.</string>
 </dict>
 </plist>

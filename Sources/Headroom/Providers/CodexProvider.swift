@@ -1,6 +1,6 @@
 import Foundation
 
-/// Reads Codex's server-authoritative quota straight out of the rollout logs.
+/// Reads current usage through Codex, falling back to timestamped rollout events.
 ///
 /// Two things make this non-obvious, both learned the hard way from real files:
 ///
@@ -9,13 +9,22 @@ import Foundation
 /// 2. Codex emits more than one kind of `rate_limits`. `limit_id: "codex"` carries
 ///    the `primary`/`secondary` percentages; `limit_id: "premium"` carries credits
 ///    and leaves both **null**. Taking the last `token_count` event therefore shows
-///    an empty gauge about as often as not. We scan backward for the last event
-///    that actually has a `primary`.
-struct CodexProvider: UsageProvider {
+///    an empty gauge about as often as not. Only Codex buckets with a recognized
+///    quota window are usable.
+final class CodexProvider: UsageProvider, @unchecked Sendable {
 
     let id: ProviderID = .codex
 
     var customSessionsRoot: URL?
+
+    private let lock = NSLock()
+    private var cachedFiles: [URL: CachedFile] = [:]
+
+    private struct CachedFile {
+        let modified: Date
+        let size: Int
+        let hit: Hit?
+    }
 
     private var sessionsRoot: URL {
         customSessionsRoot ?? FileManager.default.homeDirectoryForCurrentUser
@@ -36,38 +45,64 @@ struct CodexProvider: UsageProvider {
     }
 
     func snapshot() throws -> Snapshot {
+        lock.lock()
+        defer { lock.unlock() }
+
+        // Fixture roots must never consult the user's real account.
+        let live = customSessionsRoot == nil ? CodexUsageClient.shared.latest() : nil
+        if let live, !live.isCached {
+            return snapshot(from: live.limits, date: live.date, isCached: false)
+        }
         guard isInstalled() else {
             return Snapshot(provider: id, readings: Self.unavailable("Codex not installed"),
                             capturedAt: Date(), sourceDate: nil, planLabel: nil, rawWeighted: nil)
         }
         let files = newestRollouts()
-        guard !files.isEmpty else {
+        guard !files.isEmpty || live != nil else {
             return Snapshot(provider: id, readings: Self.unavailable("No sessions yet"),
                             capturedAt: Date(), sourceDate: nil, planLabel: nil, rawWeighted: nil)
         }
-        // The freshest file may hold no quota event at all (a session that only
-        // just started), so fall through to the next rather than reporting
-        // nothing when perfectly good data sits one file over.
-        var found: Hit?
+        // A touched/resumed file can contain a quota event much older than its
+        // mtime. Compare event timestamps across files, including files beyond
+        // the old five-candidate limit. Cache tails so unchanged files are cheap.
+        var found = live.map { Hit(limits: $0.limits, date: $0.date) }
+        let fileSet = Set(files)
+        cachedFiles = cachedFiles.filter { fileSet.contains($0.key) }
         for file in files {
-            if let hit = try? lastQuotaEvent(in: file) { found = hit; break }
+            let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            let modified = values?.contentModificationDate ?? .distantPast
+            let size = values?.fileSize ?? 0
+            let hit: Hit?
+            if let cached = cachedFiles[file], cached.modified == modified, cached.size == size {
+                hit = cached.hit
+            } else {
+                hit = try? lastQuotaEvent(in: file)
+                cachedFiles[file] = CachedFile(modified: modified, size: size, hit: hit)
+            }
+            if let hit, found == nil || hit.date > found!.date { found = hit }
         }
         guard let hit = found else {
             return Snapshot(provider: id, readings: Self.unavailable("No quota event in recent sessions"),
                             capturedAt: Date(), sourceDate: nil, planLabel: nil, rawWeighted: nil)
         }
 
-        let readings = Self.readings(from: hit.limits)
+        return snapshot(from: hit.limits, date: hit.date,
+                        isCached: Date().timeIntervalSince(hit.date) > 1800 || live?.isCached == true)
+    }
 
-        let banked = hit.limits.bankedResets ?? hit.limits.rateLimitResetCredits?.availableCount
+    private func snapshot(from limits: RateLimits, date: Date, isCached: Bool) -> Snapshot {
+        let readings = Self.readings(from: limits)
+
+        let banked = limits.bankedResets ?? limits.rateLimitResetCredits?.availableCount
 
         return Snapshot(provider: id,
                         readings: readings,
                         capturedAt: Date(),
-                        sourceDate: hit.date,
-                        planLabel: hit.limits.planType,
+                        sourceDate: date,
+                        planLabel: limits.planType,
                         rawWeighted: nil,
-                        bankedResets: banked)
+                        bankedResets: banked,
+                        isCached: isCached)
     }
 
     // MARK: - Mapping
@@ -112,21 +147,9 @@ struct CodexProvider: UsageProvider {
 
     // MARK: - Finding the newest session
 
-    /// Newest rollout files by **modification time**, not by directory name.
-    ///
-    /// The obvious optimisation is to sort the `sessions/YYYY/MM/DD` directories
-    /// descending and take the first one with files, since the names are
-    /// zero-padded and therefore chronological. That is wrong, and it fails
-    /// silently: a *resumed* session keeps appending to its original file, which
-    /// still lives in the directory for the day it was created. Resume a
-    /// four-day-old session and the freshest quota data on disk sits in the
-    /// oldest-looking folder, while the name-sorted winner is days stale — stale
-    /// enough that its window has expired, so the gauge reports "window reset"
-    /// while Codex is running right now.
-    ///
-    /// So: stat the files in the most recent handful of day directories and sort
-    /// by mtime. Bounded, so this stays a few dozen stats rather than thousands.
-    private func newestRollouts(limit: Int = 5) -> [URL] {
+    /// Discover all day directories: resumed sessions keep their original path.
+    /// Modification time orders work, but never determines quota freshness.
+    private func newestRollouts() -> [URL] {
         let fm = FileManager.default
         let rootPath = sessionsRoot.path
 
@@ -142,9 +165,7 @@ struct CodexProvider: UsageProvider {
                 .sorted { $0.lastPathComponent > $1.lastPathComponent }
         }
 
-        // Walk the most recent day directories by name — that part is still a
-        // fine way to *find candidates* cheaply. It just can't pick the winner.
-        let days = Array(kids(sessionsRoot).lazy.flatMap(kids).flatMap(kids).prefix(12))
+        let days = kids(sessionsRoot).flatMap(kids).flatMap(kids)
 
         var candidates: [(url: URL, modified: Date)] = []
         for day in days {
@@ -156,17 +177,20 @@ struct CodexProvider: UsageProvider {
             for f in files {
                 guard PosixSecurity.verifyDirectoryChain(basePath: rootPath, targetPath: f.path) else { continue }
                 guard PosixSecurity.verifyACLSafety(path: f.path) else { continue }
+                var st = stat()
+                guard lstat(f.path, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG,
+                      st.st_uid == geteuid(), (st.st_mode & 0o022) == 0 else { continue }
                 let m = (try? f.resourceValues(forKeys: [.contentModificationDateKey]))?
                     .contentModificationDate ?? .distantPast
                 candidates.append((f, m))
             }
         }
-        return candidates.sorted { $0.modified > $1.modified }.prefix(limit).map(\.url)
+        return candidates.sorted { $0.modified > $1.modified }.map(\.url)
     }
 
     // MARK: - Reverse tail
 
-    private struct Hit { let limits: RateLimits; let date: Date? }
+    private struct Hit { let limits: RateLimits; let date: Date }
 
     private static let marker = Data("token_count".utf8)
 
@@ -237,9 +261,13 @@ struct CodexProvider: UsageProvider {
             guard let row = try? decoder.decode(RolloutLine.self, from: data),
                   row.payload?.type == "token_count",
                   let limits = row.payload?.rateLimits,
-                  limits.primary?.usedPercent != nil          // <-- the "premium" guard
+                  limits.limitId == nil || limits.limitId == "codex",
+                  [limits.primary, limits.secondary].compactMap({ $0 }).contains(where: {
+                      $0.usedPercent != nil && [300, 10_080].contains($0.windowMinutes ?? 0)
+                  }),
+                  let date = row.date
             else { continue }
-            return Hit(limits: limits, date: row.date)
+            return Hit(limits: limits, date: date)
         }
         return nil
     }
@@ -296,6 +324,25 @@ struct RateWindow: Decodable, Sendable {
     let usedPercent: Double?
     let windowMinutes: Int?
     let resetsAt: Double?
+
+    init(usedPercent: Double?, windowMinutes: Int?, resetsAt: Double?) {
+        self.usedPercent = usedPercent
+        self.windowMinutes = windowMinutes
+        self.resetsAt = resetsAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case usedPercent, windowMinutes, windowDurationMins, resetsAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        usedPercent = try values.decodeIfPresent(Double.self, forKey: .usedPercent)
+        // RPC and rollout records use different names for the same duration.
+        windowMinutes = try values.decodeIfPresent(Int.self, forKey: .windowMinutes)
+            ?? values.decodeIfPresent(Int.self, forKey: .windowDurationMins)
+        resetsAt = try values.decodeIfPresent(Double.self, forKey: .resetsAt)
+    }
 }
 
 extension ISO8601DateFormatter {

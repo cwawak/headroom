@@ -11,7 +11,7 @@
 
 How much AI quota you have left, in your macOS menu bar.
 
-A gauge needle displays the quota status of the agent you are actively using (or the agent closest to exhaustion); clicking reveals detailed per-agent quota breakdowns with animated drain capsules. It reads only the local disk logs that CLI tools already write to disk — **no network calls, no credentials, no API keys, and zero token consumption.**
+A gauge needle displays the quota status of the agent you are actively using (or the agent closest to exhaustion); clicking reveals detailed per-agent quota breakdowns with animated drain capsules. Codex usage is refreshed through the installed Codex CLI's read-only account usage RPC, which makes an authenticated network request using your existing Codex login. Headroom does not read or store credentials, require API keys, or consume model tokens. Claude uses local logs and Antigravity uses its local daemon.
 
 Requires macOS 14 (Sonoma) or newer.
 
@@ -42,7 +42,7 @@ This fork accumulates significant enhancements and architectural refinements ove
 
 | Agent | Source | Accuracy | Notes |
 | --- | --- | --- | --- |
-| **Codex** | `~/.codex/sessions/**/rollout-*.jsonl` | **exact** | Authoritative. The server computes `used_percent` and Codex logs it directly. |
+| **Codex** | Codex CLI `account/rateLimits/read`, with local rollout fallback | **exact when current** | Server-authoritative usage. Historical fallback is labeled cached and excluded from the menu bar status and reset alerts. |
 | **Claude** | `~/.claude/projects/**/*.jsonl` | **estimated** | Weighted token ledger divided by a calibrated capacity. |
 | **Antigravity** | Local language server daemon | **exact** | Authoritative. The local daemon exposes `RetrieveUserQuotaSummary` on loopback. |
 
@@ -50,7 +50,7 @@ Everything shown in the UI represents **remaining quota**. A reading of "73% lef
 
 ### Why Claude Needs Calibration (and Codex Doesn't)
 
-- **Codex**: Reports the exact percentage enforced by OpenAI's servers. There is nothing to calibrate. Headroom parses the latest session log (sorted by modification time, scanning backward for non-null primary limits) to show exact values.
+- **Codex**: Reports the exact percentage enforced by OpenAI's servers. There is nothing to calibrate. Headroom uses the installed CLI's `app-server` usage RPC without starting a conversation. Requests are cached for one minute, including retry backoff, and the background safety timer refreshes every five minutes. If unavailable, it chooses the newest valid quota event by its timestamp across local session files. Readings over 30 minutes old are labeled cached, as are previously fetched readings after a failed refresh.
 - **Claude Code**: Logs exact per-message token counts but *never* writes the quota limit against which those counts are measured. Headroom computes the numerator from local transcripts and needs to learn the denominator:
   1. Open **Calibrate from Claude's usage page…** from the Headroom menu.
   2. Navigate to Claude → Settings → Usage in your browser.
@@ -120,6 +120,7 @@ Headroom includes built-in command-line diagnostic tools:
 | `Sources/Headroom/App/AppDelegate.swift` | Status item controller, dynamic NSMenu lifecycle, preferences submenus, and calibration modal. |
 | `Sources/Headroom/App/Probe.swift` | CLI diagnostic probe (`--probe`) inspecting provider state without launching the GUI. |
 | `Sources/Headroom/Providers/CodexProvider.swift` | Reverse-tail chronological parser reading authoritative Codex rollout logs. |
+| `Sources/Headroom/Providers/CodexUsageClient.swift` | Bounded read-only usage RPC through the installed Codex CLI, with caching and retry backoff. |
 | `Sources/Headroom/Providers/ClaudeProvider.swift` | Incremental ledger aggregating token counts across Claude Code and Desktop agent transcripts. |
 | `Sources/Headroom/Providers/Calibration.swift` | Exponential and moving-average model learning Claude capacity limits. |
 | `Sources/Headroom/Providers/AntigravityProvider.swift` | Honest detection without invented numbers or unauthorized network requests. |
@@ -131,7 +132,7 @@ Headroom includes built-in command-line diagnostic tools:
 ## Hard-Won Lessons & Engineering Notes
 
 1. **Claude Code JSONL is not chronological**: 86% of records in real-world transcripts arrive out of order (backward jumps up to 21 hours) due to sub-agents, resumed sessions, and compaction. Logs must be read once and tracked by offset.
-2. **Resumed sessions continue appending to original folders**: Codex folders are timestamped `YYYY/MM/DD`, but resuming an old session writes into that older directory. Candidate logs must be ordered by modification time, not directory name.
+2. **File modification time is not quota freshness**: Resumed sessions retain old directories, and a touched file may contain older quota events than another file. Compare actual quota timestamps across directories; cache unchanged tails to keep scans cheap.
 3. **Dual `rate_limits` shapes in Codex**: `limit_id: "codex"` has primary percentages; `limit_id: "premium"` carries credit sentinels. Backward scanning must skip non-primary limits.
 4. **Expired deadlines must not display stale percentages**: An expired `resetsAt` timestamp causes a stale 100% reading to falsely indicate blocking. Reset state must rollover cleanly.
 5. **Session windows vs. calendar windows**: Claude uses a 5-hour sliding session window from first interaction, alongside a weekly calendar window resetting at a designated day/time.

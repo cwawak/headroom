@@ -67,6 +67,8 @@ struct Snapshot: Sendable {
     let rawWeighted: [QuotaWindow: Double]?
     /// Banked reset credits if available (e.g., from Codex rate limits).
     let bankedResets: Int?
+    /// Historical fallback data, excluded from current status and reset alerts.
+    let isCached: Bool
 
     init(
         provider: ProviderID,
@@ -75,7 +77,8 @@ struct Snapshot: Sendable {
         sourceDate: Date?,
         planLabel: String?,
         rawWeighted: [QuotaWindow: Double]?,
-        bankedResets: Int? = nil
+        bankedResets: Int? = nil,
+        isCached: Bool = false
     ) {
         self.provider = provider
         self.readings = readings
@@ -84,6 +87,7 @@ struct Snapshot: Sendable {
         self.planLabel = planLabel
         self.rawWeighted = rawWeighted
         self.bankedResets = bankedResets
+        self.isCached = isCached
     }
 
     /// A reading whose source event is hours old is not a current reading.
