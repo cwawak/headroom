@@ -15,6 +15,7 @@ enum Probe {
                 let snap = try p.snapshot()
                 print(String(format: "parsed in %.1f ms", Date().timeIntervalSince(t0) * 1000))
                 print("plan: \(snap.planLabel ?? "—")")
+                if snap.isCached { print("usage source: cached fallback (not current)") }
                 if let s = snap.staleness { print(String(format: "source age: %.1f min", s / 60)) }
                 if let banked = snap.bankedResets {
                     print("banked resets: \(banked)")
