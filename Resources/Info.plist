@@ -9,7 +9,7 @@
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.vinaybhaskarla.headroom</string>
+	<string>com.cwawak.headroom</string>
 	<key>CFBundleName</key>
 	<string>Headroom</string>
 	<key>CFBundlePackageType</key>
